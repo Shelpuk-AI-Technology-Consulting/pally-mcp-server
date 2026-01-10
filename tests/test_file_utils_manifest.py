@@ -61,8 +61,8 @@ def test_prepare_file_content_for_prompt_expands_only_once(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_pal_model_call_timeout_sec_enforced(monkeypatch):
-    monkeypatch.setenv("PAL_MODEL_CALL_TIMEOUT_SEC", "0.01")
+async def test_pally_model_call_timeout_sec_enforced(monkeypatch):
+    monkeypatch.setenv("PALLY_MODEL_CALL_TIMEOUT_SEC", "0.01")
 
     from providers.base import ModelProvider
     from providers.shared import ModelResponse, ProviderType

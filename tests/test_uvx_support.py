@@ -33,7 +33,7 @@ class TestUvxEnvironmentHandling:
 
             with tempfile.NamedTemporaryFile("w", delete=False) as tmp_env:
                 temp_env_path = Path(tmp_env.name)
-                tmp_env.write("PAL_MCP_FORCE_ENV_OVERRIDE=false\n")
+                tmp_env.write("PALLY_MCP_FORCE_ENV_OVERRIDE=false\n")
 
             try:
                 importlib.reload(env_config)
@@ -133,14 +133,14 @@ class TestUvxProjectConfiguration:
 
         # Essential fields for uvx
         assert "name" in project
-        assert project["name"] == "pal-mcp-server"
+        assert project["name"] == "pally-mcp-server"
         assert "dependencies" in project
         assert "requires-python" in project
 
         # Script entry point for uvx
         assert "scripts" in project
-        assert "pal-mcp-server" in project["scripts"]
-        assert project["scripts"]["pal-mcp-server"] == "server:run"
+        assert "pally-mcp-server" in project["scripts"]
+        assert project["scripts"]["pally-mcp-server"] == "cli:main"
 
     def test_pyproject_dependencies_match_requirements(self):
         """Test that pyproject.toml dependencies align with requirements.txt."""
@@ -176,9 +176,8 @@ class TestUvxProjectConfiguration:
                 # requirements.txt might have additional dev dependencies
 
     def test_uvx_entry_point_callable(self):
-        """Test that the uvx entry point (server:run) is callable."""
-        import server
+        """Test that the uvx entry point (cli:main) is callable."""
+        import cli
 
-        # The entry point should reference a callable function
-        assert hasattr(server, "run"), "server module should have a 'run' function"
-        assert callable(server.run), "server.run should be callable"
+        assert hasattr(cli, "main"), "cli module should have a 'main' function"
+        assert callable(cli.main), "cli.main should be callable"

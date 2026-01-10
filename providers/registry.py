@@ -1,6 +1,7 @@
 """Model provider registry for managing available providers."""
 
 import logging
+import threading
 from typing import TYPE_CHECKING, Optional
 
 from utils.env import get_env
@@ -32,6 +33,7 @@ class ModelProviderRegistry:
     """
 
     _instance = None
+    _rotation_lock = threading.Lock()
 
     # Provider priority order for model selection
     # Native APIs first, then custom endpoints, then catch-all providers
@@ -149,6 +151,18 @@ class ModelProviderRegistry:
         instance._initialized_providers[provider_type] = provider
 
         return provider
+
+    @classmethod
+    def rotate_provider(cls, provider_type: ProviderType) -> Optional[ModelProvider]:
+        """Best-effort rotation of the cached provider instance.
+
+        Use when a cached provider is suspected to be stuck (e.g., a timed-out worker thread still
+        holding internal locks). Rotation is serialized to limit duplicate instantiations under
+        concurrent timeouts.
+        """
+
+        with cls._rotation_lock:
+            return cls.get_provider(provider_type, force_new=True)
 
     @classmethod
     def get_provider_for_model(cls, model_name: str) -> Optional[ModelProvider]:

@@ -32,7 +32,7 @@ After Claude completes the investigation (unless precommit_type is **internal**)
 - Default validation type is **external** (uses expert model for additional review)
 - To skip expert validation, explicitly request "don't use any other model" or set precommit_type to "internal"
 - **CRITICAL**: Minimum 3 steps are enforced - tool will prevent setting `next_step_required=false` before final step
-- **MANDATORY**: Changeset file (pal_precommit.changeset) must be created for external validation
+- **MANDATORY**: Changeset file (`pally_precommit.changeset`) must be created for external validation
 
 ## Model Recommendation
 

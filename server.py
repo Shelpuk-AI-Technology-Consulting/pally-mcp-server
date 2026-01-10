@@ -1,5 +1,5 @@
 """
-PAL MCP Server - Main server implementation
+Pally MCP Server - Main server implementation
 
 This module implements the core MCP (Model Context Protocol) server that provides
 AI-powered tools for code analysis, review, and assistance using multiple AI models.
@@ -152,17 +152,17 @@ except Exception as e:
 
 logger = logging.getLogger(__name__)
 
-# Log PAL_MCP_FORCE_ENV_OVERRIDE configuration for transparency
+# Log PALLY_MCP_FORCE_ENV_OVERRIDE configuration for transparency
 if env_override_enabled():
-    logger.info("PAL_MCP_FORCE_ENV_OVERRIDE enabled - .env file values will override system environment variables")
+    logger.info("PALLY_MCP_FORCE_ENV_OVERRIDE enabled - .env file values will override system environment variables")
     logger.debug("Environment override prevents conflicts between different AI tools passing cached API keys")
 else:
-    logger.debug("PAL_MCP_FORCE_ENV_OVERRIDE disabled - system environment variables take precedence")
+    logger.debug("PALLY_MCP_FORCE_ENV_OVERRIDE disabled - system environment variables take precedence")
 
 
 # Create the MCP server instance with a unique name identifier
 # This name is used by MCP clients to identify and connect to this specific server
-server: Server = Server("pal-server")
+server: Server = Server("pally-server")
 
 
 # Constants for tool filtering
@@ -370,7 +370,7 @@ PROMPT_TEMPLATES = {
     "version": {
         "name": "version",
         "description": "Show server version and system information",
-        "template": "Show PAL MCP Server version",
+            "template": "Show Pally MCP Server version",
     },
 }
 
@@ -1461,7 +1461,7 @@ async def main():
     configure_providers()
 
     # Log startup message
-    logger.info("PAL MCP Server starting up...")
+    logger.info("Pally MCP Server starting up...")
     logger.info(f"Log level: {log_level}")
 
     # Note: MCP client info will be logged during the protocol handshake
@@ -1487,7 +1487,7 @@ async def main():
     if IS_AUTO_MODE:
         handshake_instructions = (
             "When the user names a specific model (e.g. 'use chat with gpt5'), send that exact model in the tool call. "
-            "When no model is mentioned, first use the `listmodels` tool from PAL to obtain available models to choose the best one from."
+            "When no model is mentioned, first use the `listmodels` tool from Pally to obtain available models to choose the best one from."
         )
     else:
         handshake_instructions = (
@@ -1502,7 +1502,7 @@ async def main():
             read_stream,
             write_stream,
             InitializationOptions(
-                server_name="PAL",
+                server_name="PALLY",
                 server_version=__version__,
                 instructions=handshake_instructions,
                 capabilities=ServerCapabilities(
@@ -1529,7 +1529,7 @@ def run():
         parser.add_argument(
             "--version",
             action="store_true",
-            help="Print PAL MCP Server version and exit.",
+            help="Print Pally MCP Server version and exit.",
         )
         subparsers = parser.add_subparsers(dest="command")
         subparsers.add_parser("start-mcp-server", help="Start the MCP server using stdio transport.")

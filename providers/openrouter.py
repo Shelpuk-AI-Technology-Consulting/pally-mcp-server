@@ -39,7 +39,7 @@ class OpenRouterProvider(OpenAICompatibleProvider):
             "OPENROUTER_REFERER", "https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server"
         )
         or "https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server",
-        "X-Title": get_env("OPENROUTER_TITLE", "PAL MCP Server") or "PAL MCP Server",
+        "X-Title": get_env("OPENROUTER_TITLE", "Pally MCP Server") or "Pally MCP Server",
     }
 
     # Model registry for managing configurations and aliases

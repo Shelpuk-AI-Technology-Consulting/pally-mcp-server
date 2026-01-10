@@ -1,7 +1,7 @@
 [project]
-name = "pal-mcp-server"
+name = "pally-mcp-server"
 version = "9.8.2"
-description = "AI-powered MCP server with multiple model providers"
+description = "AI-powered MCP server fork with multiple model providers"
 requires-python = ">=3.9"
 dependencies = [
     "mcp>=1.0.0",
@@ -36,7 +36,7 @@ py-modules = ["server", "config", "cli"]
 ]
 
 [project.scripts]
-pal-mcp-server = "cli:main"
+pally-mcp-server = "cli:main"
 
 [tool.black]
 line-length = 120

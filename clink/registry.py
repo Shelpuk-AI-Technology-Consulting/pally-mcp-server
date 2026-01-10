@@ -14,6 +14,7 @@ from clink.constants import (
     INTERNAL_DEFAULTS,
     PROJECT_ROOT,
     USER_CONFIG_DIR,
+    LEGACY_USER_CONFIG_DIR,
     CLIInternalDefaults,
 )
 from clink.models import (
@@ -102,8 +103,10 @@ class ClinkRegistry:
             env_path = Path(env_path_raw).expanduser()
             search_paths.append(env_path)
 
-        # 3. User overrides in ~/.pal/cli_clients
+        # 3. User overrides in ~/.pally/cli_clients (preferred)
         search_paths.append(USER_CONFIG_DIR)
+        # 4. Legacy user overrides in ~/.pal/cli_clients (fallback)
+        search_paths.append(LEGACY_USER_CONFIG_DIR)
 
         seen: set[Path] = set()
 

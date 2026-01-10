@@ -1460,13 +1460,13 @@ When recommending searches, be specific about what information you need and why 
     def _get_model_call_timeout_sec(self) -> Optional[float]:
         """Return the configured wall-time cap for provider calls, if any."""
 
-        raw = (get_env("PAL_MODEL_CALL_TIMEOUT_SEC", "") or "").strip()
+        raw = (get_env("PALLY_MODEL_CALL_TIMEOUT_SEC", "") or get_env("PAL_MODEL_CALL_TIMEOUT_SEC", "") or "").strip()
         if not raw:
             return None
         try:
             value = float(raw)
         except (TypeError, ValueError):
-            logger.warning("Invalid PAL_MODEL_CALL_TIMEOUT_SEC value '%s'; ignoring.", raw)
+            logger.warning("Invalid PALLY_MODEL_CALL_TIMEOUT_SEC value '%s'; ignoring.", raw)
             return None
         if value <= 0:
             return None
@@ -1479,13 +1479,17 @@ When recommending searches, be specific about what information you need and why 
         by allowing operators to cap response length without modifying tool schemas.
         """
 
-        raw = (get_env("PAL_DEFAULT_MAX_OUTPUT_TOKENS", "") or "").strip()
+        raw = (
+            get_env("PALLY_DEFAULT_MAX_OUTPUT_TOKENS", "")
+            or get_env("PAL_DEFAULT_MAX_OUTPUT_TOKENS", "")
+            or ""
+        ).strip()
         if not raw:
             return None
         try:
             value = int(float(raw))
         except (TypeError, ValueError):
-            logger.warning("Invalid PAL_DEFAULT_MAX_OUTPUT_TOKENS value '%s'; ignoring.", raw)
+            logger.warning("Invalid PALLY_DEFAULT_MAX_OUTPUT_TOKENS value '%s'; ignoring.", raw)
             return None
         return value if value > 0 else None
 
@@ -1590,8 +1594,8 @@ When recommending searches, be specific about what information you need and why 
         try:
             loop = asyncio.get_running_loop()
             executor = ThreadPoolExecutor(
-                max_workers=int(get_env("PAL_PROVIDER_CALL_MAX_WORKERS", "1") or "1"),
-                thread_name_prefix="pal-provider-call",
+                max_workers=int(get_env("PALLY_PROVIDER_CALL_MAX_WORKERS", get_env("PAL_PROVIDER_CALL_MAX_WORKERS", "1") or "1") or "1"),
+                thread_name_prefix="pally-provider-call",
             )
             try:
                 task = loop.run_in_executor(executor, _invoke)
@@ -1610,15 +1614,38 @@ When recommending searches, be specific about what information you need and why 
             except AttributeError:
                 self._timing_model_call_s = elapsed
             provider_name = "unknown"
+            provider_type = None
             try:
-                provider_name = provider.get_provider_type().value
+                provider_type = provider.get_provider_type()
+                provider_name = provider_type.value
             except Exception:
                 pass
+            # IMPORTANT:
+            # Provider calls execute in a worker thread. When we time out, asyncio cancels the Future but the
+            # underlying thread cannot be forcibly stopped. If that thread is still running, it can keep
+            # holding the provider instance's call lock and block subsequent tool calls, leading to repeated
+            # timeouts even when the upstream API is healthy.
+            #
+            # Mitigation: rotate the cached provider instance (best-effort). Future requests will use a fresh
+            # provider instance with its own lock + HTTP client, so they aren't blocked by the orphaned call.
+            if provider_type is not None:
+                try:
+                    from providers.registry import ModelProviderRegistry
+
+                    rotated = ModelProviderRegistry.rotate_provider(provider_type)
+                    if rotated is not None and rotated is not provider:
+                        logger.warning(
+                            "Rotated cached provider instance after timeout (provider=%s, model=%s).",
+                            provider_name,
+                            model_name,
+                        )
+                except Exception:
+                    logger.debug("Failed to rotate provider after timeout.", exc_info=True)
             raise TimeoutError(
                 f"Provider call timed out after {elapsed:.1f}s (provider={provider_name}, model={model_name}, "
-                f"PAL_MODEL_CALL_TIMEOUT_SEC={timeout_sec}). "
+                f"PALLY_MODEL_CALL_TIMEOUT_SEC={timeout_sec}). "
                 "Consider: (1) increasing your MCP client's tool timeout, (2) reducing file scope / avoiding large directory scans, "
-                "(3) setting PAL_DEFAULT_MAX_OUTPUT_TOKENS to cap non-streaming output size, "
+                "(3) setting PALLY_DEFAULT_MAX_OUTPUT_TOKENS to cap non-streaming output size, "
                 "(4) raising CUSTOM_*_TIMEOUT values for OpenAI-compatible endpoints when applicable."
             ) from exc
         else:

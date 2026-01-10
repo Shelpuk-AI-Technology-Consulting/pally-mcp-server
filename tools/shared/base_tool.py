@@ -12,6 +12,7 @@ conversation handling, file processing, and response formatting.
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -1587,11 +1588,21 @@ When recommending searches, be specific about what information you need and why 
             )
 
         try:
-            task = asyncio.to_thread(_invoke)
-            if timeout_sec is not None:
-                response = await asyncio.wait_for(task, timeout=timeout_sec)
-            else:
-                response = await task
+            loop = asyncio.get_running_loop()
+            executor = ThreadPoolExecutor(
+                max_workers=int(get_env("PAL_PROVIDER_CALL_MAX_WORKERS", "1") or "1"),
+                thread_name_prefix="pal-provider-call",
+            )
+            try:
+                task = loop.run_in_executor(executor, _invoke)
+                if timeout_sec is not None:
+                    response = await asyncio.wait_for(task, timeout=timeout_sec)
+                else:
+                    response = await task
+            finally:
+                # Ensure worker threads don't leak across event loops (pytest creates per-test loops).
+                # If the call timed out, cancellation is best-effort; threads cannot be forcibly stopped.
+                executor.shutdown(wait=False, cancel_futures=True)
         except asyncio.TimeoutError as exc:
             elapsed = time.perf_counter() - start_ts
             try:

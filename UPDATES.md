@@ -11,7 +11,7 @@ This file tracks notable behavior, reliability, and observability changes introd
 
 ### Mitigations implemented
 - Run sync provider calls off the event loop using a thread wrapper:
-  - Added `BaseTool._generate_content_with_provider_lock(...)` to execute `provider.generate_content(...)` via `asyncio.to_thread`.
+  - Added `BaseTool._generate_content_with_provider_lock(...)` to execute `provider.generate_content(...)` via `loop.run_in_executor(...)` using a short-lived `ThreadPoolExecutor` per call (avoids cross-event-loop hangs in pytest and keeps tool execution non-blocking).
   - Optional wall-time cap via `PAL_MODEL_CALL_TIMEOUT_SEC` (best-effort; does not forcibly terminate the underlying thread/HTTP request).
 - Serialize provider calls per provider instance:
   - Added per-provider call lock in `providers/base.py` (`ModelProvider.get_call_lock()`).
@@ -20,7 +20,7 @@ This file tracks notable behavior, reliability, and observability changes introd
   - Updated tool file embedding paths to use the manifest result instead of expanding directories separately.
   - Updated workflow expert-analysis embedding to use `read_files_with_manifest` to avoid an extra `expand_paths(...)` pass.
 - Add timing observability to outputs:
-  - Tools now attach `metadata.timings` with `file_prep_s`, `model_call_s`, `total_s` to distinguish “slow file prep” from “slow upstream call”.
+  - Tools now attach `metadata.timings` with `file_prep_s`, `model_lock_wait_s`, `model_call_s`, `total_s` to distinguish “slow file prep” vs “lock contention” vs “slow upstream call”.
 - Add default output cap knob:
   - Added `PAL_DEFAULT_MAX_OUTPUT_TOKENS` to set a default `max_output_tokens` when a tool doesn’t explicitly specify one (helps reduce long non-streaming waits).
 
@@ -59,3 +59,13 @@ This file tracks notable behavior, reliability, and observability changes introd
 ### Documentation
 - Updated `README.md` to declare this repo as a fork of `BeehiveInnovations/pal-mcp-server` and state the fork’s focus (OpenRouter routing + AI coding tool onboarding).
 - Updated all `uvx --from git+...` and clone instructions to use `Shelpuk-AI-Technology-Consulting/pally-mcp-server` as the install source.
+
+### Repo-wide metadata + onboarding scripts
+- Updated additional install/config references across the repo to point to the fork:
+  - `docs/getting-started.md` / `docs/docker-deployment.md`
+  - `run-server.sh` / `run-server.ps1` / `code_quality_checks.ps1` / `run_integration_tests.ps1`
+  - `Dockerfile` OCI labels
+  - `SECURITY.md` advisory link
+  - `conf/*.json` documentation URLs
+  - `tools/version.py` remote version check URL
+  - `providers/openrouter.py` default `OPENROUTER_REFERER` fallback

@@ -73,7 +73,7 @@
     Script Author      : GiGiDKR (https://github.com/GiGiDKR)
     Date               : 07-05-2025
     Version            : See config.py (__version__)
-    References         : https://github.com/BeehiveInnovations/pal-mcp-server
+    References         : https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server
 
 #>
 #Requires -Version 5.1
@@ -1928,7 +1928,7 @@ EXAMPLES:
 .\run-server.ps1 -Docker              # Use Docker deployment
 .\run-server.ps1 -Docker -Follow      # Docker with log following
 
-For more information, visit: https://github.com/BeehiveInnovations/pal-mcp-server
+For more information, visit: https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server
 "@ -ForegroundColor White
 }
 
@@ -1938,7 +1938,7 @@ function Show-Version {
     Write-Host "PAL MCP Server version: $version" -ForegroundColor Green
     Write-Host "PowerShell Setup Script for Windows" -ForegroundColor Cyan
     Write-Host "Author: GiGiDKR (https://github.com/GiGiDKR)" -ForegroundColor Gray
-    Write-Host "Project: BeehiveInnovations/pal-mcp-server" -ForegroundColor Gray
+    Write-Host "Project: Shelpuk-AI-Technology-Consulting/pally-mcp-server" -ForegroundColor Gray
 }
 
 # Show configuration instructions

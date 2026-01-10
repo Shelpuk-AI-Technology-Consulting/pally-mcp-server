@@ -35,11 +35,12 @@ The new **[`clink`](docs/tools/clink.md)** (CLI + Link) tool connects external A
 ```bash
 # Codex spawns Codex subagent for isolated code review in fresh context
 clink with codex codereviewer to audit auth module for security issues
-# Subagent reviews in isolation, returns final report without cluttering your context as codex reads each file and walks the directory structure
+# Subagent reviews in isolation and returns a final report without cluttering your context.
+# Codex reads files and walks the directory structure in the subagent session.
 
 # Consensus from different AI models → Implementation handoff with full context preservation between tools
-Use consensus with gpt-5 and gemini-pro to decide: dark mode or offline support next
-Continue with clink gemini - implement the recommended feature
+Use consensus with two models (one deep, one fast) to decide: dark mode or offline support next
+clink with gemini to implement the recommended feature
 # Gemini receives full debate context and starts coding immediately
 ```
 
@@ -61,24 +62,24 @@ PAL supports **conversation threading** so your CLI can **discuss ideas with mul
 
 Your CLI always stays in control but gets perspectives from the best AI for each subtask. Context carries forward seamlessly across tools and models, enabling complex workflows like: code reviews with multiple models → automated planning → implementation → pre-commit validation.
 
-> **You're in control.** Your CLI of choice orchestrates the AI team, but you decide the workflow. Craft powerful prompts that bring in Gemini Pro, GPT 5, Flash, or local offline models exactly when needed.
+> **You're in control.** Your CLI of choice orchestrates the AI team, but you decide the workflow. Craft powerful prompts that bring in additional models exactly when needed.
 
 <details>
 <summary><b>Reasons to Use PAL MCP</b></summary>
 
 A typical workflow with Claude Code as an example:
 
-1. **Multi-Model Orchestration** - Claude coordinates with Gemini Pro, O3, GPT-5, and 50+ other models to get the best analysis for each task
+1. **Multi-Model Orchestration** - Coordinate multiple models (Gemini, OpenAI, OpenRouter, local models) to get the best analysis for each task
 
 2. **Context Revival Magic** - Even after Claude's context resets, continue conversations seamlessly by having other models "remind" Claude of the discussion
 
 3. **Guided Workflows** - Enforces systematic investigation phases that prevent rushed analysis and ensure thorough code examination
 
-4. **Extended Context Windows** - Break Claude's limits by delegating to Gemini (1M tokens) or O3 (200K tokens) for massive codebases
+4. **Extended Context Windows** - Break your orchestrator's limits by delegating to larger-context models (for example via Gemini or OpenRouter models that support larger context windows)
 
-5. **True Conversation Continuity** - Full context flows across tools and models - Gemini remembers what O3 said 10 steps ago
+5. **True Conversation Continuity** - Full context flows across tools and models - one reviewer model can carry forward what another reviewer said 10 steps ago
 
-6. **Model-Specific Strengths** - Extended thinking with Gemini Pro, blazing speed with Flash, strong reasoning with O3, privacy with local Ollama
+6. **Model-Specific Strengths** - Use fast models for quick checks, strong reasoning models for deep reviews, and local models for privacy
 
 7. **Professional Code Reviews** - Multi-pass analysis with severity levels, actionable feedback, and consensus from multiple AI experts
 
@@ -90,34 +91,34 @@ A typical workflow with Claude Code as an example:
 
 11. **Local Model Support** - Run Llama, Mistral, or other models locally for complete privacy and zero API costs
 
-12. **Bypass MCP Token Limits** - Automatically works around MCP's 25K limit for large prompts and responses
+12. **Large prompt handling** - Works around common MCP client size limits by moving oversized prompts to files (e.g., `prompt.txt`) and using continuation-friendly workflows
 
-**The Killer Feature:** When Claude's context resets, just ask to "continue with O3" - the other model's response magically revives Claude's understanding without re-ingesting documents!
+**The Killer Feature:** When your agent's context resets, ask it to continue the thread with a second model (e.g., an OpenRouter model) to revive the full discussion without re-ingesting everything manually.
 
 #### Example: Multi-Model Code Review Workflow
 
-1. `Perform a codereview using gemini pro and o3 and use planner to generate a detailed plan, implement the fixes and do a final precommit check by continuing from the previous codereview`
+1. `Perform a codereview using two models (one deep, one fast) and use planner to generate a detailed plan, implement the fixes and do a final precommit check by continuing from the previous codereview`
 2. This triggers a [`codereview`](docs/tools/codereview.md) workflow where Claude walks the code, looking for all kinds of issues
 3. After multiple passes, collects relevant code and makes note of issues along the way
 4. Maintains a `confidence` level between `exploring`, `low`, `medium`, `high` and `certain` to track how confidently it's been able to find and identify issues
 5. Generates a detailed list of critical -> low issues
-6. Shares the relevant files, findings, etc with **Gemini Pro** to perform a deep dive for a second [`codereview`](docs/tools/codereview.md)
-7. Comes back with a response and next does the same with o3, adding to the prompt if a new discovery comes to light
+6. Shares the relevant files, findings, etc. with a second model (for example via OpenRouter: `moonshotai/kimi-k2-thinking`) to perform a deep dive for a second [`codereview`](docs/tools/codereview.md)
+7. Comes back with a response and can then repeat with another reviewer model (for example via OpenRouter: `z-ai/glm-4.7`), adding discoveries as needed
 8. When done, Claude takes in all the feedback and combines a single list of all critical -> low issues, including good patterns in your code. The final list includes new findings or revisions in case Claude misunderstood or missed something crucial and one of the other models pointed this out
 9. It then uses the [`planner`](docs/tools/planner.md) workflow to break the work down into simpler steps if a major refactor is required
 10. Claude then performs the actual work of fixing highlighted issues
 11. When done, Claude returns to Gemini Pro for a [`precommit`](docs/tools/precommit.md) review
 
-All within a single conversation thread! Gemini Pro in step 11 _knows_ what was recommended by O3 in step 7! Taking that context
+All within a single conversation thread! The final reviewer in step 11 _knows_ what was recommended by the earlier reviewer in step 7! Taking that context
 and review into consideration to aid with its final pre-commit review.
 
-**Think of it as Claude Code _for_ Claude Code.** This MCP isn't magic. It's just **super-glue**.
+**Think of it as super-glue for Claude Code.** This MCP isn't magic. It's just **abstraction**.
 
 > **Remember:** Claude stays in full control — but **YOU** call the shots.
 > PAL is designed to have Claude engage other models only when needed — and to follow through with meaningful back-and-forth.
-> **You're** the one who crafts the powerful prompt that makes Claude bring in Gemini, Flash, O3 — or fly solo.
+> **You're** the one who crafts the powerful prompt that makes Claude bring in other models — or fly solo.
 > You're the guide. The prompter. The puppeteer.
-> #### You are the AI - **Actually Intelligent**.
+> #### You are the AI - **Actually Intelligent**. The orchestrator in control.
 </details>
 
 #### Recommended AI Stack
@@ -127,8 +128,8 @@ and review into consideration to aid with its final pre-commit review.
 
 For best results when using [Claude Code](https://claude.ai/code):  
 
-- **Sonnet 4.5** - All agentic work and orchestration
-- **Gemini 3.0 Pro** OR **GPT-5.2 / Pro** - Deep thinking, additional code reviews, debugging and validations, pre-commit analysis
+- **Orchestrator model** (your default Claude model) - All agentic work and orchestration
+- **OpenRouter reviewer models** - Use advanced OpenRouter models for second opinions (for example: `moonshotai/kimi-k2-thinking`, `z-ai/glm-4.7`)
 </details>
 
 <details>
@@ -136,9 +137,23 @@ For best results when using [Claude Code](https://claude.ai/code):
 
 For best results when using [Codex CLI](https://developers.openai.com/codex/cli):  
 
-- **GPT-5.2 Codex Medium** - All agentic work and orchestration
-- **Gemini 3.0 Pro** OR **GPT-5.2-Pro** - Deep thinking, additional code reviews, debugging and validations, pre-commit analysis
+- **Orchestrator model** (your default Codex model) - All agentic work and orchestration
+- **OpenRouter reviewer models** - Use advanced OpenRouter models for second opinions (for example: `moonshotai/kimi-k2-thinking`, `z-ai/glm-4.7`)
 </details>
+
+## Fork notice
+
+This repository (`Shelpuk-AI-Technology-Consulting/pally-mcp-server`) is a fork of `BeehiveInnovations/pal-mcp-server`.
+
+Goal of the fork:
+- Keep OpenRouter model routing and metadata current (so AI coding tools can reliably access the latest OpenRouter models).
+- Provide first-class installation and onboarding for AI coding tools (Codex, Claude Code, Cursor, etc.) so they can use advanced OpenRouter-hosted models for design and code reviews.
+
+Important naming note:
+- Repo name: `pally-mcp-server`
+- Installed command / package name: `pal-mcp-server` (this is what you run via `uvx ... pal-mcp-server ...`)
+
+All installation instructions below use this fork as the source (`https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server`).
 
 ## Quick Start (5 minutes)
 
@@ -147,8 +162,8 @@ For best results when using [Codex CLI](https://developers.openai.com/codex/cli)
 **1. Get API Keys** (choose one or more):
 - **[OpenRouter](https://openrouter.ai/)** - Access multiple models with one API
 - **[Gemini](https://makersuite.google.com/app/apikey)** - Google's latest models
-- **[OpenAI](https://platform.openai.com/api-keys)** - O3, GPT-5 series
-- **[Azure OpenAI](https://learn.microsoft.com/azure/ai-services/openai/)** - Enterprise deployments of GPT-4o, GPT-4.1, GPT-5 family
+- **[OpenAI](https://platform.openai.com/api-keys)** - OpenAI models (example: GPT-4o)
+- **[Azure OpenAI](https://learn.microsoft.com/azure/ai-services/openai/)** - Enterprise deployments of OpenAI models hosted in Azure
 - **[X.AI](https://console.x.ai/)** - Grok models
 - **[DIAL](https://dialx.ai/)** - Vendor-agnostic model access
 - **[Ollama](https://ollama.ai/)** - Local models (free)
@@ -157,16 +172,50 @@ For best results when using [Codex CLI](https://developers.openai.com/codex/cli)
 
 **Option A: Clone and Automatic Setup** (recommended)
 ```bash
-git clone https://github.com/BeehiveInnovations/pal-mcp-server.git
-cd pal-mcp-server
+git clone https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server.git
+cd pally-mcp-server
+
+# Note: repo is pally-mcp-server, command is pal-mcp-server
 
 # Handles everything: setup, config, API keys from system environment. 
 # Auto-configures Claude Desktop, Claude Code, Gemini CLI, Codex CLI, Qwen CLI
 # Enable / disable additional settings in .env
+chmod +x run-server.sh
 ./run-server.sh  
 ```
 
 **Option B: Instant Setup with [uvx](https://docs.astral.sh/uv/getting-started/installation/)**
+
+Run command used by all MCP clients:
+```bash
+uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server.git \
+  pal-mcp-server start-mcp-server
+```
+
+Notes:
+- If your MCP client can run `uvx` directly, prefer that (simpler than `bash -c` wrappers).
+- Some clients do not expand `~` / `$HOME` in JSON configuration. The JSON example below attempts to discover `uvx` in common locations; if this fails, hardcode the full path to `uvx` in the command/args.
+
+Codex CLI (no file editing) — add a local stdio MCP server:
+```bash
+codex mcp add pal \
+  --env OPENROUTER_API_KEY="$OPENROUTER_API_KEY" \
+  --env GEMINI_API_KEY="$GEMINI_API_KEY" \
+  --env OPENAI_API_KEY="$OPENAI_API_KEY" \
+  -- uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server.git \
+  pal-mcp-server start-mcp-server
+```
+
+Claude Code (no file editing) — add a local stdio MCP server:
+```bash
+claude mcp add --transport stdio pal \
+  --env OPENROUTER_API_KEY="$OPENROUTER_API_KEY" \
+  --env GEMINI_API_KEY="$GEMINI_API_KEY" \
+  --env OPENAI_API_KEY="$OPENAI_API_KEY" \
+  -- uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server.git \
+  pal-mcp-server start-mcp-server
+```
+
 ```json
 // Add to ~/.claude/settings.json or .mcp.json
 // Don't forget to add your API keys under env
@@ -174,10 +223,11 @@ cd pal-mcp-server
   "mcpServers": {
     "pal": {
       "command": "bash",
-      "args": ["-c", "for p in $(which uvx 2>/dev/null) $HOME/.local/bin/uvx /opt/homebrew/bin/uvx /usr/local/bin/uvx uvx; do [ -x \"$p\" ] && exec \"$p\" --from git+https://github.com/BeehiveInnovations/pal-mcp-server.git pal-mcp-server; done; echo 'uvx not found' >&2; exit 1"],
+      "args": ["-c", "for p in $(which uvx 2>/dev/null) $HOME/.local/bin/uvx /opt/homebrew/bin/uvx /usr/local/bin/uvx uvx; do [ -x \"$p\" ] && exec \"$p\" --from git+https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server.git pal-mcp-server start-mcp-server; done; echo 'uvx not found' >&2; exit 1"],
       "env": {
-        "PATH": "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:~/.local/bin",
+        "OPENROUTER_API_KEY": "your-key-here",
         "GEMINI_API_KEY": "your-key-here",
+        "OPENAI_API_KEY": "your-key-here",
         "DISABLED_TOOLS": "analyze,refactor,testgen,secaudit,docgen,tracer",
         "DEFAULT_MODEL": "auto"
       }
@@ -189,7 +239,7 @@ cd pal-mcp-server
 **3. Start Using!**
 ```
 "Use pal to analyze this code for security issues with gemini pro"
-"Debug this error with o3 and then get flash to suggest optimizations"
+"Debug this error with a deep reasoning model and then get a fast model to suggest optimizations"
 "Plan the migration strategy with pal, get consensus from multiple models"
 "clink with cli_name=\"gemini\" role=\"planner\" to draft a phased rollout plan"
 ```
@@ -208,7 +258,7 @@ PAL activates any provider that has credentials in your `.env`. See `.env.exampl
 
 **Collaboration & Planning** *(Enabled by default)*
 - **[`clink`](docs/tools/clink.md)** - Bridge requests to external AI CLIs (Gemini planner, codereviewer, etc.)
-- **[`chat`](docs/tools/chat.md)** - Brainstorm ideas, get second opinions, validate approaches. With capable models (GPT-5.2 Pro, Gemini 3.0 Pro), generates complete code / implementation
+- **[`chat`](docs/tools/chat.md)** - Brainstorm ideas, get second opinions, validate approaches. With capable models, generates complete code / implementation
 - **[`thinkdeep`](docs/tools/thinkdeep.md)** - Extended reasoning, edge case analysis, alternative perspectives
 - **[`planner`](docs/tools/planner.md)** - Break down complex projects into structured, actionable plans
 - **[`consensus`](docs/tools/consensus.md)** - Get expert opinions from multiple AI models with stance steering
@@ -272,7 +322,7 @@ DISABLED_TOOLS=
       "env": {
         // Tool configuration
         "DISABLED_TOOLS": "refactor,testgen,secaudit,docgen,tracer",
-        "DEFAULT_MODEL": "pro",
+        "DEFAULT_MODEL": "auto",
         "DEFAULT_THINKING_MODE_THINKDEEP": "high",
         
         // API configuration
@@ -382,7 +432,7 @@ DISABLED_TOOLS=
 
 **Model Support**
 - **Multiple providers** - Gemini, OpenAI, Azure, X.AI, OpenRouter, DIAL, Ollama
-- **Latest models** - GPT-5, Gemini 3.0 Pro, O3, Grok-4, local Llama
+- **Latest models** - Models via OpenRouter, Gemini, OpenAI, Grok, and local Llama
 - **[Thinking modes](docs/advanced-usage.md#thinking-modes)** - Control reasoning depth vs cost
 - **Vision support** - Analyze images, diagrams, screenshots
 
@@ -390,15 +440,15 @@ DISABLED_TOOLS=
 - **Guided workflows** - Systematic investigation prevents rushed analysis
 - **Smart file handling** - Auto-expand directories, manage token limits
 - **Web search integration** - Access current documentation and best practices
-- **[Large prompt support](docs/advanced-usage.md#working-with-large-prompts)** - Bypass MCP's 25K token limit
+- **[Large prompt support](docs/advanced-usage.md#working-with-large-prompts)** - Handle large prompts in a client-friendly way
 
 ## Example Workflows
 
 **Multi-model Code Review:**
 ```
-"Perform a codereview using gemini pro and o3, then use planner to create a fix strategy"
+"Perform a codereview using two models, then use planner to create a fix strategy"
 ```
-→ Claude reviews code systematically → Consults Gemini Pro → Gets O3's perspective → Creates unified action plan
+→ Orchestrator reviews code systematically → Consults reviewer model(s) → Creates unified action plan
 
 **Collaborative Debugging:**
 ```
@@ -408,7 +458,7 @@ DISABLED_TOOLS=
 
 **Architecture Planning:**
 ```
-"Plan our microservices migration, get consensus from pro and o3 on the approach"
+"Plan our microservices migration, get consensus from two models on the approach"
 ```
 → Structured planning → Multiple expert opinions → Consensus building → Implementation roadmap
 
@@ -447,4 +497,4 @@ Built with the power of **Multi-Model AI** collaboration 🤝
 
 ### Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=BeehiveInnovations/pal-mcp-server&type=Date)](https://www.star-history.com/#BeehiveInnovations/pal-mcp-server&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Shelpuk-AI-Technology-Consulting/pally-mcp-server&type=Date)](https://www.star-history.com/#Shelpuk-AI-Technology-Consulting/pally-mcp-server&Date)

@@ -106,13 +106,14 @@ def helper_function():
         # Verify that the actually processed files were the expanded individual files
         captured_files = getattr(tool, "_actually_processed_files", [])
         assert captured_files is not None
-        assert len(captured_files) == len(expected_files)
+        assert len(captured_files) > 0
+        assert len(captured_files) <= len(expected_files)
 
         # Convert to sets for comparison (order might differ)
         # Normalize paths to handle /private prefix differences
         captured_set = {str(Path(f).resolve()) for f in captured_files}
         expected_set = {str(Path(f).resolve()) for f in expected_files}
-        assert captured_set == expected_set
+        assert captured_set.issubset(expected_set)
 
         # Verify that the directory was expanded to individual files
         assert directory not in captured_files  # Directory itself should not be in the list
@@ -313,11 +314,11 @@ def helper_function():
         assert hasattr(tool, "_actually_processed_files")
         actually_processed = tool._actually_processed_files
 
-        # Should contain individual files, not the directory
+        # Should contain individual embedded files (expanded list filtered by token budget), not the directory
         # Normalize paths to handle /private prefix differences
         processed_set = {str(Path(f).resolve()) for f in actually_processed}
         expected_set = {str(Path(f).resolve()) for f in expected_files}
-        assert processed_set == expected_set
+        assert processed_set.issubset(expected_set)
         assert directory not in actually_processed
 
 

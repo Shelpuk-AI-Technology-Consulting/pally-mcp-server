@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
@@ -386,8 +387,10 @@ class BaseWorkflowMixin(ABC):
         Returns:
             tuple[str, list[str]]: (file_content, processed_files)
         """
-        # Use read_files directly with token budgeting, bypassing filter_new_files
-        from utils.file_utils import expand_paths, read_files
+        # Use read_files_with_manifest directly with token budgeting, bypassing filter_new_files.
+        # This expands directories once and returns the list of individual files actually embedded
+        # (after token budgeting), avoiding duplicate traversal.
+        from utils.file_utils import read_files_with_manifest
 
         # Get token budget for files
         current_model_context = self.get_current_model_context()
@@ -406,15 +409,12 @@ class BaseWorkflowMixin(ABC):
 
         # Read files directly without conversation history filtering
         logger.debug(f"[WORKFLOW_FILES] {self.get_name()}: Force embedding {len(files)} files for expert analysis")
-        file_content = read_files(
+        file_content, processed_files = read_files_with_manifest(
             files,
             max_tokens=max_tokens,
             reserve_tokens=1000,
             include_line_numbers=self.wants_line_numbers_by_default(),
         )
-
-        # Expand paths to get individual files for tracking
-        processed_files = expand_paths(files)
 
         logger.debug(
             f"[WORKFLOW_FILES] {self.get_name()}: Expert analysis embedding: {len(processed_files)} files, "
@@ -616,6 +616,11 @@ class BaseWorkflowMixin(ABC):
         try:
             # Store arguments for access by helper methods
             self._current_arguments = arguments
+            # Reset per-call timing accumulators (file prep is recorded inside _prepare_file_content_for_prompt)
+            self._timing_file_prep_s = 0.0
+            self._timing_model_lock_wait_s = 0.0
+            self._timing_model_call_s = 0.0
+            self._timing_total_start_ts = time.perf_counter()
 
             # Validate request using tool-specific model
             request = self.get_workflow_request_model()(**arguments)
@@ -1160,6 +1165,16 @@ class BaseWorkflowMixin(ABC):
                     "model_used": resolved_model_name,
                     "provider_used": provider_name,
                 }
+                try:
+                    total_s = time.perf_counter() - self._timing_total_start_ts
+                except Exception:
+                    total_s = 0.0
+                metadata["timings"] = {
+                    "file_prep_s": round(float(getattr(self, "_timing_file_prep_s", 0.0) or 0.0), 6),
+                    "model_lock_wait_s": round(float(getattr(self, "_timing_model_lock_wait_s", 0.0) or 0.0), 6),
+                    "model_call_s": round(float(getattr(self, "_timing_model_call_s", 0.0) or 0.0), 6),
+                    "total_s": round(float(total_s), 6),
+                }
 
                 # Preserve existing metadata and add workflow metadata
                 if "metadata" not in response_data:
@@ -1181,6 +1196,16 @@ class BaseWorkflowMixin(ABC):
                     "model_used": model_name,
                     "provider_used": "unknown",
                 }
+                try:
+                    total_s = time.perf_counter() - self._timing_total_start_ts
+                except Exception:
+                    total_s = 0.0
+                metadata["timings"] = {
+                    "file_prep_s": round(float(getattr(self, "_timing_file_prep_s", 0.0) or 0.0), 6),
+                    "model_lock_wait_s": round(float(getattr(self, "_timing_model_lock_wait_s", 0.0) or 0.0), 6),
+                    "model_call_s": round(float(getattr(self, "_timing_model_call_s", 0.0) or 0.0), 6),
+                    "total_s": round(float(total_s), 6),
+                }
 
                 # Preserve existing metadata and add workflow metadata
                 if "metadata" not in response_data:
@@ -1196,7 +1221,19 @@ class BaseWorkflowMixin(ABC):
             # Don't fail the workflow if metadata addition fails
             logger.warning(f"[WORKFLOW_METADATA] {self.get_name()}: Failed to add metadata: {e}")
             # Still add basic metadata with tool name
-            response_data["metadata"] = {"tool_name": self.get_name()}
+            try:
+                total_s = time.perf_counter() - self._timing_total_start_ts
+            except Exception:
+                total_s = 0.0
+            response_data["metadata"] = {
+                "tool_name": self.get_name(),
+                "timings": {
+                    "file_prep_s": round(float(getattr(self, "_timing_file_prep_s", 0.0) or 0.0), 6),
+                    "model_lock_wait_s": round(float(getattr(self, "_timing_model_lock_wait_s", 0.0) or 0.0), 6),
+                    "model_call_s": round(float(getattr(self, "_timing_model_call_s", 0.0) or 0.0), 6),
+                    "total_s": round(float(total_s), 6),
+                },
+            }
 
     def _extract_clean_workflow_content_for_history(self, response_data: dict) -> str:
         """
@@ -1490,7 +1527,8 @@ class BaseWorkflowMixin(ABC):
                 logger.warning(warning)
 
             # Generate AI response - use request parameters if available
-            model_response = provider.generate_content(
+            model_response, _model_call_s = await self._generate_content_with_provider_lock(
+                provider,
                 prompt=prompt,
                 model_name=model_name,
                 system_prompt=system_prompt,

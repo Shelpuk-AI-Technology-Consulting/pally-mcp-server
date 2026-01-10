@@ -92,12 +92,11 @@ class TestWorkflowFileEmbedding:
 
         assert should_embed is True, "Final steps in new conversations SHOULD embed files"
 
-    @patch("utils.file_utils.read_files")
-    @patch("utils.file_utils.expand_paths")
+    @patch("utils.file_utils.read_files_with_manifest")
     @patch("utils.conversation_memory.get_thread")
     @patch("utils.conversation_memory.get_conversation_file_list")
     def test_comprehensive_file_collection_for_expert_analysis(
-        self, mock_get_conversation_file_list, mock_get_thread, mock_expand_paths, mock_read_files
+        self, mock_get_conversation_file_list, mock_get_thread, mock_read_files_with_manifest
     ):
         """Test that expert analysis collects relevant files from current workflow and conversation history"""
         # Setup test files for different sources
@@ -111,8 +110,7 @@ class TestWorkflowFileEmbedding:
         mock_thread_context = Mock()
         mock_get_thread.return_value = mock_thread_context
         mock_get_conversation_file_list.return_value = conversation_files
-        mock_expand_paths.return_value = self.test_files
-        mock_read_files.return_value = "# File content\nprint('test')"
+        mock_read_files_with_manifest.return_value = ("# File content\nprint('test')", self.test_files)
 
         # Mock model context for token allocation
         mock_model_context = Mock()
@@ -148,14 +146,14 @@ class TestWorkflowFileEmbedding:
         mock_get_thread.assert_called_once_with("test-thread-123")
         mock_get_conversation_file_list.assert_called_once_with(mock_thread_context)
 
-        # Verify it called read_files with ALL unique relevant files
+        # Verify it called read_files_with_manifest with ALL unique relevant files
         # Should include files from: conversation_files + current_relevant_files
         # But deduplicated: [test_files[0], test_files[1]] (unique set)
         expected_unique_files = list(set(conversation_files + current_relevant_files))
 
         # The actual call will be with whatever files were collected and deduplicated
-        mock_read_files.assert_called_once()
-        call_args = mock_read_files.call_args
+        mock_read_files_with_manifest.assert_called_once()
+        call_args = mock_read_files_with_manifest.call_args
         called_files = call_args[0][0]  # First positional argument
 
         # Verify all expected files are included
@@ -165,13 +163,11 @@ class TestWorkflowFileEmbedding:
         # Verify return value
         assert file_content == "# File content\nprint('test')"
 
-    @patch("utils.file_utils.read_files")
-    @patch("utils.file_utils.expand_paths")
-    def test_force_embed_bypasses_conversation_history(self, mock_expand_paths, mock_read_files):
+    @patch("utils.file_utils.read_files_with_manifest")
+    def test_force_embed_bypasses_conversation_history(self, mock_read_files_with_manifest):
         """Test that _force_embed_files_for_expert_analysis bypasses conversation filtering"""
         # Setup mocks
-        mock_expand_paths.return_value = self.test_files
-        mock_read_files.return_value = "# File content\nprint('test')"
+        mock_read_files_with_manifest.return_value = ("# File content\nprint('test')", self.test_files)
 
         # Mock model context for token allocation
         mock_model_context = Mock()
@@ -186,16 +182,13 @@ class TestWorkflowFileEmbedding:
         # Call the method
         file_content, processed_files = self.mock_tool._force_embed_files_for_expert_analysis(self.test_files)
 
-        # Verify it called read_files directly (bypassing conversation history filtering)
-        mock_read_files.assert_called_once_with(
+        # Verify it called read_files_with_manifest directly (bypassing conversation history filtering)
+        mock_read_files_with_manifest.assert_called_once_with(
             self.test_files,
             max_tokens=100000,
             reserve_tokens=1000,
             include_line_numbers=True,
         )
-
-        # Verify it expanded paths to get individual files
-        mock_expand_paths.assert_called_once_with(self.test_files)
 
         # Verify return values
         assert file_content == "# File content\nprint('test')"

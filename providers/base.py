@@ -1,8 +1,10 @@
 """Base interfaces and common behaviour for model providers."""
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
+from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 if TYPE_CHECKING:
@@ -44,6 +46,15 @@ class ModelProvider(ABC):
         self.api_key = api_key
         self.config = kwargs
         self._sorted_capabilities_cache: Optional[list[tuple[str, ModelCapabilities]]] = None
+        # Providers may be shared across tool calls; threaded tool execution must not
+        # concurrently share non-thread-safe SDK clients. Serialize calls per provider.
+        # Use an RLock to avoid deadlocks if provider methods become re-entrant
+        # (e.g., generate_content calling other provider helpers that also serialize).
+        self._call_lock = threading.RLock()
+
+    def get_call_lock(self) -> AbstractContextManager[None]:
+        """Return the per-provider call serialization lock."""
+        return self._call_lock
 
     # ------------------------------------------------------------------
     # Provider identity & capability surface

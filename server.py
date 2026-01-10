@@ -1514,8 +1514,37 @@ async def main():
 
 
 def run():
-    """Console script entry point for pal-mcp-server."""
+    """Console script entry point for pal-mcp-server.
+
+    Supports a stable `start-mcp-server` subcommand for `uvx`-style invocation:
+        uvx --from git+<repo-url> pal-mcp-server start-mcp-server
+
+    Backward compatible: calling `pal-mcp-server` with no args starts the stdio server.
+    """
     try:
+        import argparse
+        import sys
+
+        parser = argparse.ArgumentParser(prog="pal-mcp-server", add_help=True)
+        parser.add_argument(
+            "--version",
+            action="store_true",
+            help="Print PAL MCP Server version and exit.",
+        )
+        subparsers = parser.add_subparsers(dest="command")
+        subparsers.add_parser("start-mcp-server", help="Start the MCP server using stdio transport.")
+
+        args, unknown = parser.parse_known_args(sys.argv[1:])
+        if unknown:
+            parser.error(f"unrecognized arguments: {' '.join(unknown)}")
+
+        if args.version:
+            print(__version__)
+            return
+
+        if args.command not in (None, "start-mcp-server"):
+            parser.error(f"unknown command: {args.command}")
+
         asyncio.run(main())
     except KeyboardInterrupt:
         # Handle graceful shutdown

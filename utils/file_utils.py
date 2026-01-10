@@ -546,6 +546,30 @@ def read_files(
     Returns:
         str: All file contents formatted for AI consumption
     """
+    content, _manifest = read_files_with_manifest(
+        file_paths,
+        code=code,
+        max_tokens=max_tokens,
+        reserve_tokens=reserve_tokens,
+        include_line_numbers=include_line_numbers,
+    )
+    return content
+
+
+def read_files_with_manifest(
+    file_paths: list[str],
+    code: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    reserve_tokens: int = 50_000,
+    *,
+    include_line_numbers: bool = False,
+) -> tuple[str, list[str]]:
+    """
+    Read multiple files and optional direct code with token budgeting, returning an embedded-file manifest.
+
+    This mirrors :func:`read_files` but also returns the list of *individual file paths* that were actually
+    embedded in the returned content (after directory expansion + token budgeting).
+    """
     if max_tokens is None:
         max_tokens = DEFAULT_CONTEXT_WINDOW
 
@@ -559,6 +583,7 @@ def read_files(
     available_tokens = max_tokens - reserve_tokens
 
     files_skipped = []
+    files_embedded: list[str] = []
 
     # Priority 1: Handle direct code if provided
     # Direct code is prioritized because it's explicitly provided by the user
@@ -598,6 +623,7 @@ def read_files(
                 if total_tokens + file_tokens <= available_tokens:
                     content_parts.append(file_content)
                     total_tokens += file_tokens
+                    files_embedded.append(file_path)
                     logger.debug(f"[FILES] Added file {file_path}, total tokens: {total_tokens:,}")
                 else:
                     # File too large for remaining budget
@@ -622,7 +648,7 @@ def read_files(
 
     result = "\n\n".join(content_parts) if content_parts else ""
     logger.debug(f"[FILES] read_files complete: {len(result)} chars, {total_tokens:,} tokens used")
-    return result
+    return result, files_embedded
 
 
 def estimate_file_tokens(file_path: str) -> int:

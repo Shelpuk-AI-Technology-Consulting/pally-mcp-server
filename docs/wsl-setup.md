@@ -27,8 +27,8 @@ npm install -g @anthropic-ai/claude-code
    cd ~
    
    # Clone the repository
-   git clone https://github.com/BeehiveInnovations/pal-mcp-server.git
-   cd pal-mcp-server
+   git clone https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server.git
+   cd pally-mcp-server
    ```
 
 2. **Run the setup script**:
@@ -61,7 +61,7 @@ python3 -m pip install --upgrade pip
 
 ### Path Issues
 
-- Always use the full WSL path for MCP configuration (e.g., `/home/YourName/pal-mcp-server/`)
+- Always use the full WSL path for MCP configuration (e.g., `/home/YourName/pally-mcp-server/`)
 - The setup script automatically detects WSL and configures the correct paths
 
 ### Claude Code Connection Issues
@@ -71,9 +71,9 @@ python3 -m pip install --upgrade pip
 cat ~/.claude.json | grep -A 10 "pal"
 
 # The configuration should show the correct WSL path to the Python executable
-# Example: "/home/YourName/pal-mcp-server/.pal_venv/bin/python"
+# Example: "/home/YourName/pally-mcp-server/.pal_venv/bin/python"
 ```
 
 ### Performance Tip
 
-For best performance, keep your pal-mcp-server directory in the WSL filesystem (e.g., `~/pal-mcp-server`) rather than in the Windows filesystem (`/mnt/c/...`).
+For best performance, keep your pally-mcp-server directory in the WSL filesystem (e.g., `~/pally-mcp-server`) rather than in the Windows filesystem (`/mnt/c/...`).

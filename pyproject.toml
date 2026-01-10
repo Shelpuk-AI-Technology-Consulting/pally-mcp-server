@@ -15,7 +15,7 @@ dependencies = [
 include = ["tools*", "providers*", "systemprompts*", "utils*", "conf*", "clink*"]
 
 [tool.setuptools]
-py-modules = ["server", "config"]
+py-modules = ["server", "config", "cli"]
 
 [tool.setuptools.package-data]
 "*" = [
@@ -36,7 +36,7 @@ py-modules = ["server", "config"]
 ]
 
 [project.scripts]
-pal-mcp-server = "server:run"
+pal-mcp-server = "cli:main"
 
 [tool.black]
 line-length = 120

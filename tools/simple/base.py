@@ -12,6 +12,7 @@ and inherit all the conversation, file processing, and model handling
 capabilities from BaseTool.
 """
 
+import time
 from abc import abstractmethod
 from typing import Any, Optional
 
@@ -281,6 +282,12 @@ class SimpleTool(BaseTool):
         logger = logging.getLogger(f"tools.{self.get_name()}")
 
         try:
+            start_ts = time.perf_counter()
+            # Reset per-call timing accumulators (file prep is recorded inside _prepare_file_content_for_prompt)
+            self._timing_file_prep_s = 0.0
+            self._timing_model_lock_wait_s = 0.0
+            self._timing_model_call_s = 0.0
+
             # Store arguments for access by helper methods
             self._current_arguments = arguments
 
@@ -441,7 +448,8 @@ class SimpleTool(BaseTool):
             supports_thinking = capabilities.supports_extended_thinking
 
             # Generate content with provider abstraction
-            model_response = provider.generate_content(
+            model_response, _model_call_s = await self._generate_content_with_provider_lock(
+                provider,
                 prompt=prompt,
                 model_name=self._current_model_name,
                 system_prompt=system_prompt,
@@ -498,7 +506,8 @@ class SimpleTool(BaseTool):
                         retry_prompt = f"{original_prompt}\n\nIMPORTANT: Please provide a substantive response. If you cannot respond to the above request, please explain why and suggest alternatives."
 
                         try:
-                            retry_response = provider.generate_content(
+                            retry_response, _retry_call_s = await self._generate_content_with_provider_lock(
+                                provider,
                                 prompt=retry_prompt,
                                 model_name=self._current_model_name,
                                 system_prompt=system_prompt,
@@ -564,6 +573,16 @@ class SimpleTool(BaseTool):
                         )
 
             # Return the tool output as TextContent, marking protocol errors appropriately
+            total_s = time.perf_counter() - start_ts
+            timings = {
+                "file_prep_s": round(float(getattr(self, "_timing_file_prep_s", 0.0) or 0.0), 6),
+                "model_lock_wait_s": round(float(getattr(self, "_timing_model_lock_wait_s", 0.0) or 0.0), 6),
+                "model_call_s": round(float(getattr(self, "_timing_model_call_s", 0.0) or 0.0), 6),
+                "total_s": round(float(total_s), 6),
+            }
+            if tool_output.metadata is None:
+                tool_output.metadata = {}
+            tool_output.metadata.setdefault("timings", timings)
             payload = tool_output.model_dump_json()
             if tool_output.status == "error":
                 logger.error("%s reported error status - raising ToolExecutionError", self.get_name())
@@ -585,6 +604,20 @@ class SimpleTool(BaseTool):
                 content=f"Error in {self.get_name()}: {str(e)}",
                 content_type="text",
             )
+            try:
+                total_s = time.perf_counter() - start_ts
+                error_output.metadata = error_output.metadata or {}
+                error_output.metadata.setdefault(
+                    "timings",
+                    {
+                        "file_prep_s": round(float(getattr(self, "_timing_file_prep_s", 0.0) or 0.0), 6),
+                        "model_lock_wait_s": round(float(getattr(self, "_timing_model_lock_wait_s", 0.0) or 0.0), 6),
+                        "model_call_s": round(float(getattr(self, "_timing_model_call_s", 0.0) or 0.0), 6),
+                        "total_s": round(float(total_s), 6),
+                    },
+                )
+            except Exception:
+                pass
             raise ToolExecutionError(error_output.model_dump_json()) from e
 
     def _parse_response(self, raw_text: str, request, model_info: Optional[dict] = None):

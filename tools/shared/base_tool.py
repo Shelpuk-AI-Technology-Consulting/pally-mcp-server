@@ -11,6 +11,7 @@ conversation handling, file processing, and response formatting.
 
 import logging
 import os
+import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -29,7 +30,7 @@ from utils.conversation_memory import (
     get_thread,
 )
 from utils.env import get_env
-from utils.file_utils import read_file_content, read_files
+from utils.file_utils import read_file_content
 
 # Import models from tools.models for compatibility
 try:
@@ -1097,26 +1098,32 @@ class BaseTool(ABC):
                 f"[FILES] {self.name}: Starting file embedding with token budget {effective_max_tokens + reserve_tokens:,}"
             )
             try:
-                # Before calling read_files, expand directories to get individual file paths
-                from utils.file_utils import expand_paths
+                # Expand + read in one pass so directory traversal is not duplicated.
+                from utils.file_utils import read_files_with_manifest
 
-                expanded_files = expand_paths(files_to_embed)
-                logger.debug(
-                    f"[FILES] {self.name}: Expanded {len(files_to_embed)} paths to {len(expanded_files)} individual files"
-                )
-
-                file_content = read_files(
+                start_ts = time.perf_counter()
+                file_content, embedded_files = read_files_with_manifest(
                     files_to_embed,
                     max_tokens=effective_max_tokens + reserve_tokens,
                     reserve_tokens=reserve_tokens,
                     include_line_numbers=self.wants_line_numbers_by_default(),
                 )
+                elapsed_s = time.perf_counter() - start_ts
+                try:
+                    self._timing_file_prep_s += elapsed_s
+                except AttributeError:
+                    self._timing_file_prep_s = elapsed_s
+
+                logger.debug(
+                    f"[FILES] {self.name}: File embedding completed in {elapsed_s:.3f}s "
+                    f"({len(embedded_files)} files embedded)"
+                )
                 # Note: No need to validate against MCP_PROMPT_SIZE_LIMIT here
                 # read_files already handles token-aware truncation based on model's capabilities
                 content_parts.append(file_content)
 
-                # Track the expanded files as actually processed
-                actually_processed_files.extend(expanded_files)
+                # Track the actual embedded files (expanded list filtered by token budget)
+                actually_processed_files.extend(embedded_files)
 
                 # Estimate tokens for debug logging
                 from utils.token_utils import estimate_tokens
@@ -1448,6 +1455,168 @@ When recommending searches, be specific about what information you need and why 
             # and log a warning (but don't fail the request)
             logger.warning(f"Temperature validation failed for {model_context.model_name}: {e}")
             return temperature, [f"Temperature validation failed: {e}"]
+
+    def _get_model_call_timeout_sec(self) -> Optional[float]:
+        """Return the configured wall-time cap for provider calls, if any."""
+
+        raw = (get_env("PAL_MODEL_CALL_TIMEOUT_SEC", "") or "").strip()
+        if not raw:
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            logger.warning("Invalid PAL_MODEL_CALL_TIMEOUT_SEC value '%s'; ignoring.", raw)
+            return None
+        if value <= 0:
+            return None
+        return value
+
+    def _get_default_max_output_tokens(self) -> Optional[int]:
+        """Return a default max_output_tokens cap for provider calls, if configured.
+
+        This is intended to mitigate long non-streaming completions causing MCP client timeouts
+        by allowing operators to cap response length without modifying tool schemas.
+        """
+
+        raw = (get_env("PAL_DEFAULT_MAX_OUTPUT_TOKENS", "") or "").strip()
+        if not raw:
+            return None
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError):
+            logger.warning("Invalid PAL_DEFAULT_MAX_OUTPUT_TOKENS value '%s'; ignoring.", raw)
+            return None
+        return value if value > 0 else None
+
+    async def _generate_content_with_provider_lock(
+        self,
+        provider: ModelProvider,
+        *,
+        prompt: str,
+        model_name: str,
+        system_prompt: Optional[str],
+        temperature: float,
+        max_output_tokens: Optional[int] = None,
+        thinking_mode: Optional[str] = None,
+        images: Optional[list[str]] = None,
+        **kwargs: Any,
+    ):
+        """
+        Execute a sync provider call without blocking the event loop.
+
+        Notes
+        - Providers are cached and may hold non-thread-safe sync clients; serialize calls per provider instance.
+        - Optional wall-time cap is enforced via PAL_MODEL_CALL_TIMEOUT_SEC (best-effort; thread cancellation is not forced).
+        """
+
+        import asyncio
+
+        timeout_sec = self._get_model_call_timeout_sec()
+        if max_output_tokens is None:
+            max_output_tokens = self._get_default_max_output_tokens()
+        start_ts = time.perf_counter()
+
+        def _invoke():
+            # Providers are expected to expose a per-instance call lock, but tests may inject
+            # lightweight mocks. Fall back to un-locked execution when the lock isn't available.
+            lock = None
+            try:
+                lock = provider.get_call_lock()
+            except Exception:
+                lock = None
+
+            if lock is not None:
+                lock_wait_start = time.perf_counter()
+                acquired = False
+                try:
+                    if hasattr(lock, "acquire") and hasattr(lock, "release"):
+                        lock.acquire()
+                        acquired = True
+                        lock_wait_s = time.perf_counter() - lock_wait_start
+                        try:
+                            self._timing_model_lock_wait_s += lock_wait_s
+                        except AttributeError:
+                            self._timing_model_lock_wait_s = lock_wait_s
+                        return provider.generate_content(
+                            prompt=prompt,
+                            model_name=model_name,
+                            system_prompt=system_prompt,
+                            temperature=temperature,
+                            max_output_tokens=max_output_tokens,
+                            thinking_mode=thinking_mode,
+                            images=images,
+                            **kwargs,
+                        )
+
+                    # Lock may be a context manager (e.g., `threading.RLock` wrapped), measure best-effort.
+                    with lock:
+                        lock_wait_s = time.perf_counter() - lock_wait_start
+                        try:
+                            self._timing_model_lock_wait_s += lock_wait_s
+                        except AttributeError:
+                            self._timing_model_lock_wait_s = lock_wait_s
+                        return provider.generate_content(
+                            prompt=prompt,
+                            model_name=model_name,
+                            system_prompt=system_prompt,
+                            temperature=temperature,
+                            max_output_tokens=max_output_tokens,
+                            thinking_mode=thinking_mode,
+                            images=images,
+                            **kwargs,
+                        )
+                except TypeError:
+                    # Lock isn't usable (e.g., mocked) – proceed without locking.
+                    pass
+                finally:
+                    if acquired:
+                        try:
+                            lock.release()
+                        except Exception:
+                            pass
+
+            return provider.generate_content(
+                prompt=prompt,
+                model_name=model_name,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+                thinking_mode=thinking_mode,
+                images=images,
+                **kwargs,
+            )
+
+        try:
+            task = asyncio.to_thread(_invoke)
+            if timeout_sec is not None:
+                response = await asyncio.wait_for(task, timeout=timeout_sec)
+            else:
+                response = await task
+        except asyncio.TimeoutError as exc:
+            elapsed = time.perf_counter() - start_ts
+            try:
+                self._timing_model_call_s += elapsed
+            except AttributeError:
+                self._timing_model_call_s = elapsed
+            provider_name = "unknown"
+            try:
+                provider_name = provider.get_provider_type().value
+            except Exception:
+                pass
+            raise TimeoutError(
+                f"Provider call timed out after {elapsed:.1f}s (provider={provider_name}, model={model_name}, "
+                f"PAL_MODEL_CALL_TIMEOUT_SEC={timeout_sec}). "
+                "Consider: (1) increasing your MCP client's tool timeout, (2) reducing file scope / avoiding large directory scans, "
+                "(3) setting PAL_DEFAULT_MAX_OUTPUT_TOKENS to cap non-streaming output size, "
+                "(4) raising CUSTOM_*_TIMEOUT values for OpenAI-compatible endpoints when applicable."
+            ) from exc
+        else:
+            elapsed = time.perf_counter() - start_ts
+            try:
+                self._timing_model_call_s += elapsed
+            except AttributeError:
+                self._timing_model_call_s = elapsed
+            return response, elapsed
 
     def _validate_image_limits(
         self, images: Optional[list[str]], model_context: Optional[Any] = None, continuation_id: Optional[str] = None

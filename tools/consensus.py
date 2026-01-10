@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from pydantic import Field, model_validator
@@ -574,6 +575,11 @@ of the evidence, even when it strongly points in one direction.""",
     async def _consult_model(self, model_config: dict, request) -> dict:
         """Consult a single model and return its response."""
         try:
+            start_ts = time.perf_counter()
+            # Reset per-consultation timing accumulators
+            self._timing_file_prep_s = 0.0
+            self._timing_model_call_s = 0.0
+
             # Import and create ModelContext once at the beginning
             from utils.model_context import ModelContext
 
@@ -615,7 +621,8 @@ of the evidence, even when it strongly points in one direction.""",
                 logger.warning(warning)
 
             # Call the model with validated temperature
-            response = provider.generate_content(
+            response, _model_call_s = await self._generate_content_with_provider_lock(
+                provider,
                 prompt=prompt,
                 model_name=model_name,
                 system_prompt=system_prompt,
@@ -632,6 +639,11 @@ of the evidence, even when it strongly points in one direction.""",
                 "metadata": {
                     "provider": provider.get_provider_type().value,
                     "model_name": model_name,
+                    "timings": {
+                        "file_prep_s": round(float(getattr(self, "_timing_file_prep_s", 0.0) or 0.0), 6),
+                        "model_call_s": round(float(getattr(self, "_timing_model_call_s", 0.0) or 0.0), 6),
+                        "total_s": round(float(time.perf_counter() - start_ts), 6),
+                    },
                 },
             }
 

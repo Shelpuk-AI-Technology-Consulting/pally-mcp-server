@@ -109,15 +109,19 @@ OpenRouterProvider behaviors:
   - Applies model restrictions (`utils.model_restrictions`) **including alias-aware checks**.
   - When restrictions are active, it intentionally **does not return aliases** (only canonical names) to reduce ambiguity.
 
-### Generic fallback for “unlisted” OpenRouter models
+### Unknown model behavior: dynamic discovery + fallback
 `OpenRouterProvider._lookup_capabilities`:
 
-- If the model is not found in the registry but looks like `provider/model` (contains `/`), it returns a **generic** `ModelCapabilities` object (currently hard-coded defaults like a 32K context window).
-- If the model is not found and has no `/`, it is rejected (requires explicit configuration in `conf/openrouter_models.json`).
+- If the model is not found in `conf/openrouter_models.json` but looks like `provider/model` (contains `/`), Pally first attempts to fetch real capabilities from the OpenRouter Models API:
+  - `GET https://openrouter.ai/api/v1/models` (cached in-memory with a daily refresh).
+  - Uses fields like `context_length` and `top_provider.max_completion_tokens` for budgeting.
+  - Derives certain flags from `architecture.input_modalities` + `supported_parameters` (best-effort).
+  - For ids with suffixes like `:free`, it tries the exact id first and then the base id before the last `:`.
+- If the Models API is unavailable or the model isn’t present in the API response, it falls back to a **generic** `ModelCapabilities` (~32k context window).
+- If the model has no `/` and is not in the registry, it is rejected (requires explicit configuration).
 
 Implications:
-- You can call OpenRouter with “full names” not present in `conf/openrouter_models.json` and still pass validation.
-- Those models will not show up in `listmodels` output (because listing is registry-driven).
+- Unknown OpenRouter models can be used without being listed locally, but they may not appear in `listmodels` output (listing is registry-driven).
 
 ## Transport: how OpenRouter API calls are made
 

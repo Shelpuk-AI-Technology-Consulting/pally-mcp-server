@@ -392,6 +392,7 @@ DISABLED_TOOLS=
 - After changing tool configuration, restart your Claude session for changes to take effect
 - Each tool adds to context window usage, so only enable what you need
 - `OPENROUTER_PROCESSING_TIMEOUT` (default `15`) is a time-to-first-activity watchdog for OpenRouter streaming calls: if no SSE `data:` chunks and no `: OPENROUTER PROCESSING` keep-alive is observed within this window, the request is aborted to avoid blocking subsequent OpenRouter calls.
+- OpenRouter model capabilities are sourced from `conf/openrouter_models.json`, but if you request an OpenRouter model that isn't listed there (in `provider/model` form), PAL will fetch `context_length` and related metadata from OpenRouter's Models API (`GET https://openrouter.ai/api/v1/models`) to avoid defaulting to ~32k context (cached in-memory with a daily refresh; falls back to generic defaults if the API is unavailable).
 
 </details>
 

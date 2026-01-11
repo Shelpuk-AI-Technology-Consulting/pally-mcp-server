@@ -5,11 +5,34 @@ See `requirements.txt` and `requirements-dev.txt`
 Also read CLAUDE.md and CLAUDE.local.md if available.
 
 ## Project Structure & Module Organization
-PAL MCP Server centers on `server.py`, which exposes MCP entrypoints and coordinates multi-model workflows. 
+Pally MCP Server centers on `server.py`, which exposes MCP entrypoints and coordinates multi-model workflows. 
 Feature-specific tools live in `tools/`, provider integrations in `providers/`, and shared helpers in `utils/`. 
 Prompt and system context assets stay in `systemprompts/`, while configuration templates and automation scripts live under `conf/`, `scripts/`, and `docker/`. 
 Unit tests sit in `tests/`; simulator-driven scenarios and log utilities are in `simulator_tests/` with the `communication_simulator_test.py` harness. 
 Authoritative documentation and samples live in `docs/`, and runtime diagnostics are rotated in `logs/`.
+
+## Implementation Guidelines and Best Practices
+
+When dealing with implementing new feature or fixing a bug, you always follow this approach step by step:
+1. Investigate existing application state, execution results and user input. 
+2. Write /REQUIREMENTS.md file before you start work on a new task. If it exists, rewrite it.
+- First, write the "As Is" section explaining the current state of the system. 
+-  Then, write the "To Be" section, describing in detail how the system should behave after the necessary changes. 
+-  Then write the "Requirements" section describing functional requirements.
+-  Use Kindly Web Search to get up-to-date documentation and information on packages, functions, APIs, and other technologies you plan to use.
+-  Then go over the  "Requirements" section once again, and for every functional requirement, you add acceptance criteria.
+-  Then you add the "Testing Plan" section. You list there the testing plan for this new feature, following the test-driven development (TDD) best practices.
+-  Write the "Implementation Plan" section. Now, this is super important! In the "Implementation Plan", you always describe the smallest possible changes that need to be implemented one after the other to implement the requirements. For every change, you describe how to test it.
+3. Ask moonshotai/kimi-k2-thinking and z-ai/glm-4.7 through Pally MCP server tools to review your REQUIREMENTS.md. Explain to them the requirements. Specifically, ask them to spot any issues, bugs, inconsistencies, failure modes, and corner cases. Review their feedback and consider whether it is worth taking into account. Then, if necessary, update REQUIREMENTS.md to incorporate Gemini and Claude feedback.
+4. Then proceed to the implementation. You follow the "Implementation Plan" and implement one small change at a time, testing each change with unit tests, integration tests, and smoke tests to ensure they work.
+5. Ask moonshotai/kimi-k2-thinking and z-ai/glm-4.7 through the Pally MCP server tools to review your code. Ask them to spot potential bugs, issues, corner cases, failure modes, and potential improvements. 
+6. Review kimi-k2-thinking and glm-4.7 feedback. Implement the suggestions that are worthy of consideration.
+
+## LLM Access
+
+- Whenever the user or a documentation refers to "Kimi" it means moonshotai/kimi-k2-thinking accessible with Pally MCP Server.
+- Whenever the user or a documentation refers to "GLM" it means z-ai/glm-4.7 accessible with Pally MCP Server.
+- You can access these models freely and often to ask for reviews and feedback. Just never share API keys with them. 
 
 ## Build, Test, and Development Commands
 - `source .pal_venv/bin/activate` – activate the managed Python environment.

@@ -69,3 +69,12 @@ This file tracks notable behavior, reliability, and observability changes introd
   - `conf/*.json` documentation URLs
   - `tools/version.py` remote version check URL
   - `providers/openrouter.py` default `OPENROUTER_REFERER` fallback
+
+## 2026-01-11 — Intelligent OpenRouter health monitoring (safe long tool timeouts)
+
+- Added “time-to-first-activity” OpenRouter health monitoring via `OPENROUTER_PROCESSING_TIMEOUT`:
+  - If no SSE `data:` chunk and no `: OPENROUTER PROCESSING` keep-alive is observed within the timeout window (default: `15s`), the request is aborted.
+  - If activity is observed, the request is treated as alive and allowed to continue (this is *not* an inactivity timeout).
+- This makes it safe to set a high MCP client tool timeout (e.g. `500s`) for long-running workflows:
+  - Dead/stalled OpenRouter calls fail fast and don’t occupy the per-provider call lock/queue for the full client timeout.
+  - Healthy-but-slow calls are allowed to run to completion without triggering provider rotation / fail-fast heuristics.

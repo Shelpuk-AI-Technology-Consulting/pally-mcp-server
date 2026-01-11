@@ -1,8 +1,11 @@
 """Base class for OpenAI-compatible API providers."""
 
+import asyncio
 import copy
 import ipaddress
+import json
 import logging
+import time
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -30,6 +33,7 @@ class OpenAICompatibleProvider(ModelProvider):
 
     DEFAULT_HEADERS = {}
     FRIENDLY_NAME = "OpenAI Compatible"
+    _OPENROUTER_PROCESSING_TIMEOUT_DEFAULT_SEC = 15.0
 
     def __init__(self, api_key: str, base_url: str = None, **kwargs):
         """Initialize the provider with API key and optional base URL.
@@ -59,6 +63,393 @@ class OpenAICompatibleProvider(ModelProvider):
                 f"Using external URL '{self.base_url}' without API key. "
                 "This may be insecure. Consider setting an API key for authentication."
             )
+
+    def _get_openrouter_processing_timeout_sec(self) -> float:
+        """Return the OpenRouter first-activity timeout in seconds (time-to-first-activity only)."""
+
+        raw = (get_env("OPENROUTER_PROCESSING_TIMEOUT", "") or "").strip()
+        if not raw:
+            return self._OPENROUTER_PROCESSING_TIMEOUT_DEFAULT_SEC
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            logging.warning(
+                "Invalid OPENROUTER_PROCESSING_TIMEOUT value '%s'; using default of %ss",
+                raw,
+                self._OPENROUTER_PROCESSING_TIMEOUT_DEFAULT_SEC,
+            )
+            return self._OPENROUTER_PROCESSING_TIMEOUT_DEFAULT_SEC
+        if value <= 0:
+            logging.warning(
+                "Non-positive OPENROUTER_PROCESSING_TIMEOUT value '%s'; using default of %ss",
+                raw,
+                self._OPENROUTER_PROCESSING_TIMEOUT_DEFAULT_SEC,
+            )
+            return self._OPENROUTER_PROCESSING_TIMEOUT_DEFAULT_SEC
+        return value
+
+    def _extract_usage_dict(self, usage: object) -> Optional[dict[str, int]]:
+        """Extract token usage from OpenRouter/OpenAI-style dict usage blocks."""
+
+        if not isinstance(usage, dict):
+            return None
+
+        # OpenAI chat-completions-style usage
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
+        total_tokens = usage.get("total_tokens")
+
+        # OpenAI responses-style usage
+        if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+            prompt_tokens = usage.get("input_tokens")
+            completion_tokens = usage.get("output_tokens")
+            total_tokens = usage.get("total_tokens")
+
+        def _to_int(value: object) -> int:
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        input_tokens = _to_int(prompt_tokens)
+        output_tokens = _to_int(completion_tokens)
+        if total_tokens is None:
+            total_tokens_value = input_tokens + output_tokens
+        else:
+            total_tokens_value = _to_int(total_tokens)
+
+        if input_tokens == 0 and output_tokens == 0 and total_tokens_value == 0:
+            return None
+
+        return {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens_value}
+
+    def _openrouter_headers(self) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        if self.DEFAULT_HEADERS:
+            headers.update(self.DEFAULT_HEADERS)
+        return headers
+
+    def _openrouter_url(self, path: str) -> str:
+        if not self.base_url:
+            raise ValueError("OpenRouter streaming requires base_url to be configured.")
+        return f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
+
+    async def _wait_for_openrouter_first_activity_line(self, line_iter, *, timeout_sec: float) -> str:
+        """Wait up to ``timeout_sec`` for the first OpenRouter SSE activity line."""
+
+        deadline = time.monotonic() + timeout_sec
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"OpenRouter streaming timed out awaiting first activity after {timeout_sec}s "
+                    f"(OPENROUTER_PROCESSING_TIMEOUT={timeout_sec})."
+                )
+
+            try:
+                line = await asyncio.wait_for(line_iter.__anext__(), timeout=remaining)
+            except StopAsyncIteration as exc:
+                raise TimeoutError(
+                    f"OpenRouter streaming ended before first activity after {timeout_sec}s "
+                    f"(OPENROUTER_PROCESSING_TIMEOUT={timeout_sec})."
+                ) from exc
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"OpenRouter streaming timed out awaiting first activity after {timeout_sec}s "
+                    f"(OPENROUTER_PROCESSING_TIMEOUT={timeout_sec})."
+                ) from exc
+
+            if not line:
+                continue
+
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            if stripped.startswith("data:"):
+                return line
+
+            # OpenRouter keep-alive comment (as documented by OpenRouter).
+            if stripped.startswith(":") and "OPENROUTER" in stripped.upper() and "PROCESSING" in stripped.upper():
+                return line
+
+    async def _iter_with_first(self, first: str, line_iter):
+        yield first
+        async for line in line_iter:
+            yield line
+
+    def _run_async(self, coro):
+        """Run a coroutine from sync provider code (provider calls run in worker threads)."""
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+        raise RuntimeError("Cannot run OpenRouter streaming from an active event loop thread.")
+
+    def _extract_output_text_from_responses_payload(self, response_payload: dict) -> str:
+        output = response_payload.get("output")
+        if not isinstance(output, list):
+            return ""
+
+        parts: list[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for content_item in content:
+                if not isinstance(content_item, dict):
+                    continue
+                if content_item.get("type") == "output_text":
+                    text = content_item.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+        return "".join(parts)
+
+    def _generate_openrouter_chat_completions_streaming(
+        self,
+        *,
+        completion_params: dict,
+        model_name: str,
+    ) -> ModelResponse:
+        """Execute an OpenRouter chat completion via SSE and aggregate the final content."""
+
+        import httpx
+
+        timeout_sec = self._get_openrouter_processing_timeout_sec()
+        url = self._openrouter_url("/chat/completions")
+        headers = self._openrouter_headers()
+
+        async def _call() -> ModelResponse:
+            proxy_env_vars = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]
+            transport = getattr(self, "_test_transport", None)
+
+            with suppress_env_vars(*proxy_env_vars):
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    timeout=self.timeout_config,
+                    follow_redirects=True,
+                    headers=headers,
+                ) as client:
+                    async with client.stream("POST", url, json=completion_params) as response:
+                        if response.status_code >= 400:
+                            body = (await response.aread()).decode("utf-8", errors="replace")
+                            raise RuntimeError(
+                                f"OpenRouter streaming request failed (status={response.status_code}): {body[:2000]}"
+                            )
+
+                        line_iter = response.aiter_lines()
+                        first_line = await self._wait_for_openrouter_first_activity_line(line_iter, timeout_sec=timeout_sec)
+
+                        content_parts: list[str] = []
+                        usage: Optional[dict[str, int]] = None
+                        metadata: dict[str, object] = {"endpoint": "chat_completions", "streaming": True}
+
+                        async for line in self._iter_with_first(first_line, line_iter):
+                            if not line:
+                                continue
+
+                            stripped = line.strip()
+                            if not stripped:
+                                continue
+
+                            # Ignore OpenRouter keep-alive comments.
+                            if stripped.startswith(":"):
+                                continue
+
+                            if not stripped.startswith("data:"):
+                                continue
+
+                            data = stripped[len("data:") :].lstrip()
+                            if data == "[DONE]":
+                                break
+
+                            try:
+                                payload = json.loads(data)
+                            except json.JSONDecodeError as exc:
+                                raise RuntimeError(f"OpenRouter streaming sent invalid JSON chunk: {data[:2000]}") from exc
+
+                            if isinstance(payload, dict) and payload.get("error"):
+                                raise RuntimeError(f"OpenRouter streaming error: {payload.get('error')}")
+
+                            if isinstance(payload, dict):
+                                if payload.get("id"):
+                                    metadata["id"] = payload.get("id")
+                                if payload.get("created") is not None:
+                                    metadata["created"] = payload.get("created")
+                                if payload.get("model"):
+                                    metadata["model"] = payload.get("model")
+
+                                extracted = self._extract_usage_dict(payload.get("usage"))
+                                if extracted is not None:
+                                    usage = extracted
+
+                                choices = payload.get("choices")
+                                if isinstance(choices, list):
+                                    for choice in choices:
+                                        if not isinstance(choice, dict):
+                                            continue
+                                        finish_reason = choice.get("finish_reason")
+                                        if finish_reason is not None:
+                                            metadata["finish_reason"] = finish_reason
+                                        delta = choice.get("delta")
+                                        if isinstance(delta, dict):
+                                            token = delta.get("content")
+                                            if isinstance(token, str) and token:
+                                                content_parts.append(token)
+
+                        return ModelResponse(
+                            content="".join(content_parts),
+                            usage=usage,
+                            model_name=model_name,
+                            friendly_name=self.FRIENDLY_NAME,
+                            provider=self.get_provider_type(),
+                            metadata=metadata,
+                        )
+
+        try:
+            return self._run_async(_call())
+        except TimeoutError as exc:
+            logging.warning(
+                "OpenRouter streaming timed out waiting for first activity (timeout=%ss model=%s endpoint=chat_completions): %s",
+                timeout_sec,
+                model_name,
+                exc,
+            )
+            raise
+
+    def _generate_openrouter_responses_streaming(
+        self,
+        *,
+        completion_params: dict,
+        model_name: str,
+    ) -> ModelResponse:
+        """Execute an OpenRouter responses call via SSE and extract final output text."""
+
+        import httpx
+
+        timeout_sec = self._get_openrouter_processing_timeout_sec()
+        url = self._openrouter_url("/responses")
+        headers = self._openrouter_headers()
+
+        async def _call() -> ModelResponse:
+            proxy_env_vars = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]
+            transport = getattr(self, "_test_transport", None)
+
+            with suppress_env_vars(*proxy_env_vars):
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    timeout=self.timeout_config,
+                    follow_redirects=True,
+                    headers=headers,
+                ) as client:
+                    async with client.stream("POST", url, json=completion_params) as response:
+                        if response.status_code >= 400:
+                            body = (await response.aread()).decode("utf-8", errors="replace")
+                            raise RuntimeError(
+                                f"OpenRouter streaming request failed (status={response.status_code}): {body[:2000]}"
+                            )
+
+                        line_iter = response.aiter_lines()
+                        first_line = await self._wait_for_openrouter_first_activity_line(line_iter, timeout_sec=timeout_sec)
+
+                        completed_response: Optional[dict] = None
+                        output_parts: list[str] = []
+                        usage: Optional[dict[str, int]] = None
+                        metadata: dict[str, object] = {"endpoint": "responses", "streaming": True}
+
+                        async for line in self._iter_with_first(first_line, line_iter):
+                            if not line:
+                                continue
+
+                            stripped = line.strip()
+                            if not stripped:
+                                continue
+
+                            if stripped.startswith(":"):
+                                continue
+
+                            if not stripped.startswith("data:"):
+                                continue
+
+                            data = stripped[len("data:") :].lstrip()
+                            if data == "[DONE]":
+                                break
+
+                            try:
+                                event = json.loads(data)
+                            except json.JSONDecodeError as exc:
+                                raise RuntimeError(
+                                    f"OpenRouter responses stream sent invalid JSON event: {data[:2000]}"
+                                ) from exc
+
+                            if isinstance(event, dict) and event.get("error"):
+                                raise RuntimeError(f"OpenRouter responses stream error: {event.get('error')}")
+
+                            if not isinstance(event, dict):
+                                continue
+
+                            event_type = event.get("type")
+                            if isinstance(event_type, str):
+                                metadata["last_event_type"] = event_type
+
+                            response_obj = event.get("response")
+                            if isinstance(response_obj, dict):
+                                if response_obj.get("id"):
+                                    metadata["id"] = response_obj.get("id")
+                                if response_obj.get("created_at") is not None:
+                                    metadata["created"] = response_obj.get("created_at")
+                                if response_obj.get("model"):
+                                    metadata["model"] = response_obj.get("model")
+                                extracted = self._extract_usage_dict(response_obj.get("usage"))
+                                if extracted is not None:
+                                    usage = extracted
+
+                            # Capture deltas as a fallback if response.completed is not delivered.
+                            if event_type == "response.output_text.delta":
+                                delta = event.get("delta")
+                                if isinstance(delta, str) and delta:
+                                    output_parts.append(delta)
+
+                            if event_type == "response.completed" and isinstance(response_obj, dict):
+                                completed_response = response_obj
+                                break
+
+                            if event_type in {"response.failed", "response.error"}:
+                                raise RuntimeError(f"OpenRouter responses stream failed ({event_type}): {event}")
+
+                        content = ""
+                        if completed_response is not None:
+                            content = self._extract_output_text_from_responses_payload(completed_response)
+                        if not content:
+                            content = "".join(output_parts)
+
+                        return ModelResponse(
+                            content=content,
+                            usage=usage,
+                            model_name=model_name,
+                            friendly_name=self.FRIENDLY_NAME,
+                            provider=self.get_provider_type(),
+                            metadata=metadata,
+                        )
+
+        try:
+            return self._run_async(_call())
+        except TimeoutError as exc:
+            logging.warning(
+                "OpenRouter responses streaming timed out waiting for first activity (timeout=%ss model=%s): %s",
+                timeout_sec,
+                model_name,
+                exc,
+            )
+            raise
 
     def _ensure_model_allowed(
         self,
@@ -453,6 +844,13 @@ class OpenAICompatibleProvider(ModelProvider):
                 f"o3-pro API request (sanitized): {json.dumps(sanitized_params, indent=2, ensure_ascii=False)}"
             )
 
+            if self.get_provider_type() == ProviderType.OPENROUTER and self.base_url:
+                completion_params["stream"] = True
+                return self._generate_openrouter_responses_streaming(
+                    completion_params=completion_params,
+                    model_name=model_name,
+                )
+
             response = self.client.responses.create(**completion_params)
 
             content = self._safe_extract_output_text(response)
@@ -581,12 +979,9 @@ class OpenAICompatibleProvider(ModelProvider):
             messages.append({"role": "user", "content": user_content})
 
         # Prepare completion parameters
-        # Always disable streaming for OpenRouter
-        # MCP doesn't use streaming, and this avoids issues with O3 model access
         completion_params = {
             "model": resolved_model,
             "messages": messages,
-            "stream": False,
         }
 
         # Use the effective temperature we calculated earlier
@@ -638,6 +1033,14 @@ class OpenAICompatibleProvider(ModelProvider):
 
         def _attempt() -> ModelResponse:
             attempt_counter["value"] += 1
+
+            if self.get_provider_type() == ProviderType.OPENROUTER and self.base_url:
+                completion_params["stream"] = True
+                return self._generate_openrouter_chat_completions_streaming(
+                    completion_params=completion_params,
+                    model_name=resolved_model,
+                )
+
             response = self.client.chat.completions.create(**completion_params)
 
             content = response.choices[0].message.content

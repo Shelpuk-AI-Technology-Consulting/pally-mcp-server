@@ -184,6 +184,10 @@ chmod +x run-server.sh
 ./run-server.sh  
 ```
 
+Recommended: set your MCP client's tool timeout to `500` seconds for long-running workflows.
+- Codex CLI: `tool_timeout_sec = 500.0` in `~/.codex/config.toml`
+- Claude Code: `MCP_TOOL_TIMEOUT=500000` (milliseconds)
+
 **Option B: Instant Setup with [uvx](https://docs.astral.sh/uv/getting-started/installation/)**
 
 Run command used by all MCP clients:
@@ -206,6 +210,28 @@ codex mcp add pal \
   pal-mcp-server start-mcp-server
 ```
 
+Codex CLI (recommended) — set MCP tool timeout to 500 seconds:
+```toml
+# ~/.codex/config.toml
+[mcp_servers.pal] # server name must match `codex mcp add <server-name> ...`
+tool_timeout_sec = 500.0 # seconds
+```
+
+Codex CLI (config.toml) — add the server manually with `tool_timeout_sec = 500.0`:
+```toml
+# ~/.codex/config.toml
+[mcp_servers.pal]
+command = "uvx"
+args = [
+  "--from",
+  "git+https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server.git",
+  "pal-mcp-server",
+  "start-mcp-server",
+]
+env_vars = ["OPENROUTER_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"]
+tool_timeout_sec = 500.0 # seconds
+```
+
 Claude Code (no file editing) — add a local stdio MCP server:
 ```bash
 claude mcp add --transport stdio pal \
@@ -214,6 +240,11 @@ claude mcp add --transport stdio pal \
   --env OPENAI_API_KEY="$OPENAI_API_KEY" \
   -- uvx --from git+https://github.com/Shelpuk-AI-Technology-Consulting/pally-mcp-server.git \
   pal-mcp-server start-mcp-server
+```
+
+Claude Code (recommended) — set MCP tool timeout to 500 seconds:
+```bash
+export MCP_TOOL_TIMEOUT=500000 # milliseconds (500 seconds)
 ```
 
 ```json
@@ -331,6 +362,8 @@ DISABLED_TOOLS=
         "OPENROUTER_API_KEY": "your-openrouter-key",
         
         // Logging and performance
+        // OpenRouter streaming watchdog: time-to-first-activity (SSE data or ': OPENROUTER PROCESSING')
+        "OPENROUTER_PROCESSING_TIMEOUT": "15",
         "LOG_LEVEL": "INFO",
         "CONVERSATION_TIMEOUT_HOURS": "6",
         "MAX_CONVERSATION_TURNS": "50"
@@ -358,6 +391,7 @@ DISABLED_TOOLS=
 - Essential tools (`version`, `listmodels`) cannot be disabled
 - After changing tool configuration, restart your Claude session for changes to take effect
 - Each tool adds to context window usage, so only enable what you need
+- `OPENROUTER_PROCESSING_TIMEOUT` (default `15`) is a time-to-first-activity watchdog for OpenRouter streaming calls: if no SSE `data:` chunks and no `: OPENROUTER PROCESSING` keep-alive is observed within this window, the request is aborted to avoid blocking subsequent OpenRouter calls.
 
 </details>
 

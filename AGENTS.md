@@ -15,7 +15,8 @@ Authoritative documentation and samples live in `docs/`, and runtime diagnostics
 
 When dealing with implementing new feature or fixing a bug, you always follow this approach step by step:
 1. Investigate existing application state, execution results and user input. 
-2. Write /REQUIREMENTS.md file before you start work on a new task. If it exists, rewrite it.
+2. If anything is unclear with the requirements, ask clarification questions. Always ask the user's confirmation before changing, adding, or interpreting the requirements.
+3. Write /REQUIREMENTS.md file before you start work on a new task. If it exists, rewrite it.
 - First, write the "As Is" section explaining the current state of the system. 
 -  Then, write the "To Be" section, describing in detail how the system should behave after the necessary changes. 
 -  Then write the "Requirements" section describing functional requirements.
@@ -23,10 +24,10 @@ When dealing with implementing new feature or fixing a bug, you always follow th
 -  Then go over the  "Requirements" section once again, and for every functional requirement, you add acceptance criteria.
 -  Then you add the "Testing Plan" section. You list there the testing plan for this new feature, following the test-driven development (TDD) best practices.
 -  Write the "Implementation Plan" section. Now, this is super important! In the "Implementation Plan", you always describe the smallest possible changes that need to be implemented one after the other to implement the requirements. For every change, you describe how to test it.
-3. Ask moonshotai/kimi-k2-thinking and z-ai/glm-4.7 through Pally MCP server tools to review your REQUIREMENTS.md. Explain to them the requirements. Specifically, ask them to spot any issues, bugs, inconsistencies, failure modes, and corner cases. Review their feedback and consider whether it is worth taking into account. Then, if necessary, update REQUIREMENTS.md to incorporate Gemini and Claude feedback.
-4. Then proceed to the implementation. You follow the "Implementation Plan" and implement one small change at a time, testing each change with unit tests, integration tests, and smoke tests to ensure they work.
-5. Ask moonshotai/kimi-k2-thinking and z-ai/glm-4.7 through the Pally MCP server tools to review your code. Ask them to spot potential bugs, issues, corner cases, failure modes, and potential improvements. 
-6. Review kimi-k2-thinking and glm-4.7 feedback. Implement the suggestions that are worthy of consideration.
+4. Ask moonshotai/kimi-k2-thinking and z-ai/glm-4.7 through Pally MCP server tools to review your REQUIREMENTS.md. Explain to them the requirements. Specifically, ask them to spot any issues, bugs, inconsistencies, failure modes, and corner cases. Review their feedback and consider whether it is worth taking into account. Then, if necessary, update REQUIREMENTS.md to incorporate Gemini and Claude feedback.
+5. Then proceed to the implementation. You follow the "Implementation Plan" and implement one small change at a time, testing each change with unit tests, integration tests, and smoke tests to ensure they work.
+6. Ask moonshotai/kimi-k2-thinking and z-ai/glm-4.7 through the Pally MCP server tools to review your code. Ask them to spot potential bugs, issues, corner cases, failure modes, and potential improvements. 
+7. Review kimi-k2-thinking and glm-4.7 feedback. Implement the suggestions that are worthy of consideration.
 
 ## LLM Access
 

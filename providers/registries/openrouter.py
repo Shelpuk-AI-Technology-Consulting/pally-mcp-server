@@ -19,6 +19,10 @@ class OpenRouterModelRegistry(CapabilityModelRegistry):
         )
 
     def _finalise_entry(self, entry: dict) -> tuple[ModelCapabilities, dict]:
+        # `allow_code_generation` is a Pally policy knob, not OpenRouter metadata.
+        # For OpenRouter models, default to True unless explicitly set in config.
+        allow_code_generation_explicit = "allow_code_generation" in entry
+
         provider_override = entry.get("provider")
         if isinstance(provider_override, str):
             entry_provider = ProviderType(provider_override.lower())
@@ -35,4 +39,6 @@ class OpenRouterModelRegistry(CapabilityModelRegistry):
         filtered = {k: v for k, v in entry.items() if k in CAPABILITY_FIELD_NAMES}
         filtered.setdefault("provider", entry_provider)
         capability = ModelCapabilities(**filtered)
+        if not allow_code_generation_explicit and entry_provider == ProviderType.OPENROUTER:
+            capability.allow_code_generation = True
         return capability, {}

@@ -78,3 +78,11 @@ This file tracks notable behavior, reliability, and observability changes introd
 - This makes it safe to set a high MCP client tool timeout (e.g. `500s`) for long-running workflows:
   - Dead/stalled OpenRouter calls fail fast and don’t occupy the per-provider call lock/queue for the full client timeout.
   - Healthy-but-slow calls are allowed to run to completion without triggering provider rotation / fail-fast heuristics.
+
+## 2026-01-11 — Dynamic OpenRouter capability discovery (fix unknown context windows)
+
+- Improved OpenRouter model capability handling for models not listed in `conf/openrouter_models.json`:
+  - For unknown `provider/model` names, Pally queries `GET https://openrouter.ai/api/v1/models` (cached in-memory with daily refresh) to pull real `context_length` and `top_provider.max_completion_tokens`.
+  - Derived flags (best-effort) from API metadata: `architecture.input_modalities` (vision) and `supported_parameters` (e.g., tools / json format / temperature).
+  - If the API is unavailable or the model can’t be found, Pally falls back to the previous generic OpenRouter defaults (~32k) instead of failing.
+- OpenRouter models now default `allow_code_generation=true` unless explicitly set otherwise in config.

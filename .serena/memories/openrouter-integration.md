@@ -211,3 +211,16 @@ NOTE: The registry (`providers/registry.py:get_available_models`) explicitly avo
 `providers/registries/openrouter.py:OpenRouterModelRegistry._finalise_entry` tries to interpret an entry-level `provider` field, but `providers/registries/base.py:CustomModelRegistryBase._convert_entry` overwrites `capability.provider` to the registry default provider (`ProviderType.OPENROUTER`).
 
 In the current codebase, `conf/openrouter_models.json` does not include a `provider` field, so this does not affect OpenRouter in practice. If you ever want to use `openrouter_models.json` as a multi-provider registry (e.g., embed OpenAI-native capabilities), confirm whether this overwrite is intended or adjust the registry behavior accordingly.
+
+
+## 2026-01-11 update: OpenRouter streaming + processing watchdog
+
+Some notes above are historically accurate but outdated (they describe OpenRouter calls as non-streaming).
+
+- Pally now enables **streaming** for OpenRouter calls (both Chat Completions and the Responses API path) to distinguish "still processing" vs "dead".
+- Env var: `OPENROUTER_PROCESSING_TIMEOUT` (default `15s`) implements a **time-to-first-activity** watchdog:
+  - Consider the call alive if the stream emits either an SSE `data:` line or a keep-alive comment like `: OPENROUTER PROCESSING` within the timeout.
+  - If no first activity arrives in time, Pally aborts the request (fast-fail) so it doesn’t occupy the per-provider lock/queue.
+  - Once first activity is seen, this feature does **not** impose additional idle timeouts; long generations are allowed.
+- Operational impact: it becomes safe to configure a long MCP *client* tool timeout (e.g., `500s`) without wasting the full timeout on dead OpenRouter calls.
+- Docs: `README.md` now recommends `tool_timeout_sec = 500.0` in Codex `~/.codex/config.toml` and `MCP_TOOL_TIMEOUT=500000` (ms) for Claude Code.

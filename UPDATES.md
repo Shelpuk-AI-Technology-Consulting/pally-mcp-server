@@ -86,3 +86,13 @@ This file tracks notable behavior, reliability, and observability changes introd
   - Derived flags (best-effort) from API metadata: `architecture.input_modalities` (vision) and `supported_parameters` (e.g., tools / json format / temperature).
   - If the API is unavailable or the model can’t be found, Pally falls back to the previous generic OpenRouter defaults (~32k) instead of failing.
 - OpenRouter models now default `allow_code_generation=true` unless explicitly set otherwise in config.
+
+## 2026-01-11 — Review-optimized token budgeting & context selection
+
+- Added tool-aware token allocation profiles (files/history/response/prompt) for review workloads:
+  - `codereview` defaults to `code_review`
+  - `analyze` defaults to `code_review`, and switches to `system_design_review` for `analysis_type=architecture`
+- Added adaptive response reservation for review tools to avoid wasting large portions of the context window on unused output tokens.
+- Implemented deterministic file relevance ranking (explicit mentions + type weighting + recency) and best-effort Python local import dependency closure (depth=1) for review contexts.
+- Added structure-preserving large file reduction (`[REDUCED]`) instead of skipping files when a full file doesn’t fit in the remaining budget.
+- Added deterministic conversation history compression with a summary section for omitted turns; configurable via `PALLY_CONVERSATION_VERBATIM_TURNS` (default `6`).

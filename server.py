@@ -772,7 +772,7 @@ async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[TextCon
         except Exception:
             pass
 
-        arguments = await reconstruct_thread_context(arguments)
+        arguments = await reconstruct_thread_context(arguments, tool_name=name)
         logger.debug(f"[CONVERSATION_DEBUG] After thread reconstruction, arguments keys: {list(arguments.keys())}")
         if "_remaining_tokens" in arguments:
             logger.debug(f"[CONVERSATION_DEBUG] Remaining token budget: {arguments['_remaining_tokens']:,}")
@@ -841,8 +841,10 @@ async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[TextCon
             )
             raise ToolExecutionError(error_output.model_dump_json())
 
+        token_profile = tool.get_token_profile(arguments)
+
         # Create model context with resolved model and option
-        model_context = ModelContext(model_name, model_option)
+        model_context = ModelContext(model_name, model_option, token_profile=token_profile)
         arguments["_model_context"] = model_context
         arguments["_resolved_model_name"] = model_name
         logger.debug(
@@ -851,12 +853,21 @@ async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[TextCon
         if model_option:
             logger.debug(f"Model option stored in context: '{model_option}'")
 
+        # Set an adaptive response reservation so review tasks don't waste context window on unused output tokens.
+        user_prompt = arguments.get("_original_user_prompt") or arguments.get("prompt") or ""
+        file_hint_count = len(arguments.get("absolute_file_paths") or []) or len(arguments.get("relevant_files") or [])
+        model_context.estimate_response_tokens(
+            prompt_tokens=estimate_tokens(user_prompt),
+            file_hint_count=file_hint_count,
+            profile=token_profile,
+        )
+
         # EARLY FILE SIZE VALIDATION AT MCP BOUNDARY
         # Check file sizes before tool execution using resolved model
         argument_files = arguments.get("absolute_file_paths")
         if argument_files:
             logger.debug(f"Checking file sizes for {len(argument_files)} files with model {model_name}")
-            file_size_check = check_total_file_size(argument_files, model_name)
+            file_size_check = check_total_file_size(argument_files, model_context)
             if file_size_check:
                 logger.warning(f"File size check failed for {name} with model {model_name}")
                 raise ToolExecutionError(ToolOutput(**file_size_check).model_dump_json())
@@ -965,7 +976,7 @@ Remember: Only suggest follow-ups when they would genuinely add value to the dis
 "The agent to use the continuation_id when you do."""
 
 
-async def reconstruct_thread_context(arguments: dict[str, Any]) -> dict[str, Any]:
+async def reconstruct_thread_context(arguments: dict[str, Any], *, tool_name: str | None = None) -> dict[str, Any]:
     """
     Reconstruct conversation context for stateless-to-stateful thread continuation.
 
@@ -1095,7 +1106,9 @@ async def reconstruct_thread_context(arguments: dict[str, Any]) -> dict[str, Any
     # Create model context early to use for history building
     from utils.model_context import ModelContext
 
-    tool = TOOLS.get(context.tool_name)
+    # Use the tool being invoked now (if provided) so token budgeting matches the current request.
+    active_tool_name = tool_name or context.tool_name
+    tool = TOOLS.get(active_tool_name)
     requires_model = tool.requires_model() if tool else True
 
     # Check if we should use the model from the previous conversation turn
@@ -1201,6 +1214,23 @@ async def reconstruct_thread_context(arguments: dict[str, Any]) -> dict[str, Any
             model_context = ModelContext(fallback_model)
             arguments["_model_context"] = model_context
             arguments["_resolved_model_name"] = fallback_model
+
+    # Apply token profile + adaptive response reservation for this invocation.
+    token_profile = tool.get_token_profile(arguments) if tool is not None else "default"
+    try:
+        from utils.model_context import TokenProfile
+
+        model_context.token_profile = TokenProfile(token_profile)
+    except Exception:
+        token_profile = "default"
+
+    prompt_tokens_for_reserve = estimate_tokens(arguments.get("prompt", "") or "")
+    file_hint_count = len(arguments.get("absolute_file_paths") or [])
+    model_context.estimate_response_tokens(
+        prompt_tokens=prompt_tokens_for_reserve,
+        file_hint_count=file_hint_count,
+        profile=token_profile,
+    )
 
     # Build conversation history with model-specific limits
     logger.debug(f"[CONVERSATION_DEBUG] Building conversation history for thread {continuation_id}")

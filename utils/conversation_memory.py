@@ -130,6 +130,15 @@ except ValueError:
     )
     MAX_CONVERSATION_TURNS = 50
 
+# How many most-recent turns to keep verbatim in conversation history.
+try:
+    verbatim_raw = (get_env("PALLY_CONVERSATION_VERBATIM_TURNS", "6") or "6").strip()
+    CONVERSATION_VERBATIM_TURNS = int(verbatim_raw)
+    if CONVERSATION_VERBATIM_TURNS <= 0:
+        CONVERSATION_VERBATIM_TURNS = 6
+except ValueError:
+    CONVERSATION_VERBATIM_TURNS = 6
+
 # Get conversation timeout from environment (in hours), default to 3 hours
 try:
     timeout_raw = (get_env("CONVERSATION_TIMEOUT_HOURS", "3") or "3").strip()
@@ -807,100 +816,146 @@ def build_conversation_history(context: ThreadContext, model_context=None, read_
     if all_files:
         logger.debug(f"[FILES] Starting embedding for {len(all_files)} files")
 
-        # Plan file inclusion based on size constraints
-        # CRITICAL: all_files is already ordered by newest-first prioritization from get_conversation_file_list()
-        # So when _plan_file_inclusion_by_size() hits token limits, it naturally excludes OLDER files first
-        # while preserving the most recent file references - exactly what we want!
-        files_to_include, files_to_skip, estimated_tokens = _plan_file_inclusion_by_size(all_files, max_file_tokens)
+        # For code-review / design-review profiles, prefer relevance ranking + structure-preserving reduction.
+        is_review_profile = False
+        try:
+            from utils.model_context import TokenProfile
 
-        if files_to_skip:
-            logger.info(f"[FILES] Excluding {len(files_to_skip)} files from conversation history: {files_to_skip}")
-            logger.debug("[FILES] Files excluded for various reasons (size constraints, missing files, access issues)")
+            is_review_profile = getattr(model_context, "token_profile", None) in (
+                TokenProfile.CODE_REVIEW,
+                TokenProfile.SYSTEM_DESIGN_REVIEW,
+            )
+        except Exception:
+            is_review_profile = False
 
-        if files_to_include:
+        if is_review_profile and read_files_func is None:
+            from pathlib import Path
+
+            from utils.file_relevance import FileRankingContext, infer_project_root
+            from utils.file_utils import read_files_with_manifest
+
+            recency_order = {str(Path(path).resolve()): idx for idx, path in enumerate(all_files)}
+            ranking_context = FileRankingContext(
+                prompt="",
+                explicit_paths=set(),
+                project_root=infer_project_root(all_files),
+                recency_order=recency_order,
+            )
+            files_content, embedded_files = read_files_with_manifest(
+                all_files,
+                max_tokens=max_file_tokens,
+                reserve_tokens=0,
+                include_line_numbers=False,
+                ranking_context=ranking_context,
+                enable_reduction=True,
+            )
+            skipped_count = len(set(all_files) - set(embedded_files))
+
             history_parts.extend(
                 [
                     "=== FILES REFERENCED IN THIS CONVERSATION ===",
                     "The following files have been shared and analyzed during our conversation.",
-                    (
-                        ""
-                        if not files_to_skip
-                        else f"[NOTE: {len(files_to_skip)} files omitted (size constraints, missing files, or access issues)]"
-                    ),
+                    "" if skipped_count == 0 else f"[NOTE: {skipped_count} file(s) omitted due to token limits]",
                     "Refer to these when analyzing the context and requests below:",
                     "",
                 ]
             )
+            history_parts.append(files_content if files_content else "(No accessible files found)")
+        else:
+            # Plan file inclusion based on size constraints
+            # CRITICAL: all_files is already ordered by newest-first prioritization from get_conversation_file_list()
+            # So when _plan_file_inclusion_by_size() hits token limits, it naturally excludes OLDER files first
+            # while preserving the most recent file references - exactly what we want!
+            files_to_include, files_to_skip, estimated_tokens = _plan_file_inclusion_by_size(all_files, max_file_tokens)
 
-            if read_files_func is None:
-                from utils.file_utils import read_file_content
+            if files_to_skip:
+                logger.info(f"[FILES] Excluding {len(files_to_skip)} files from conversation history: {files_to_skip}")
+                logger.debug("[FILES] Files excluded for various reasons (size constraints, missing files, access issues)")
 
-                # Process files for embedding
-                file_contents = []
-                total_tokens = 0
-                files_included = 0
+            if files_to_include:
+                history_parts.extend(
+                    [
+                        "=== FILES REFERENCED IN THIS CONVERSATION ===",
+                        "The following files have been shared and analyzed during our conversation.",
+                        (
+                            ""
+                            if not files_to_skip
+                            else f"[NOTE: {len(files_to_skip)} files omitted (size constraints, missing files, or access issues)]"
+                        ),
+                        "Refer to these when analyzing the context and requests below:",
+                        "",
+                    ]
+                )
 
-                for file_path in files_to_include:
-                    try:
-                        logger.debug(f"[FILES] Processing file {file_path}")
-                        formatted_content, content_tokens = read_file_content(file_path)
-                        if formatted_content:
-                            file_contents.append(formatted_content)
-                            total_tokens += content_tokens
-                            files_included += 1
-                            logger.debug(
-                                f"File embedded in conversation history: {file_path} ({content_tokens:,} tokens)"
-                            )
-                        else:
-                            logger.debug(f"File skipped (empty content): {file_path}")
-                    except Exception as e:
-                        # More descriptive error handling for missing files
+                if read_files_func is None:
+                    from utils.file_utils import read_file_content
+
+                    # Process files for embedding
+                    file_contents = []
+                    total_tokens = 0
+                    files_included = 0
+
+                    for file_path in files_to_include:
                         try:
-                            if not os.path.exists(file_path):
-                                logger.info(
-                                    f"File no longer accessible for conversation history: {file_path} - file was moved/deleted since conversation (marking as excluded)"
+                            logger.debug(f"[FILES] Processing file {file_path}")
+                            formatted_content, content_tokens = read_file_content(file_path)
+                            if formatted_content:
+                                file_contents.append(formatted_content)
+                                total_tokens += content_tokens
+                                files_included += 1
+                                logger.debug(
+                                    f"File embedded in conversation history: {file_path} ({content_tokens:,} tokens)"
                                 )
                             else:
+                                logger.debug(f"File skipped (empty content): {file_path}")
+                        except Exception as e:
+                            # More descriptive error handling for missing files
+                            try:
+                                if not os.path.exists(file_path):
+                                    logger.info(
+                                        f"File no longer accessible for conversation history: {file_path} - file was moved/deleted since conversation (marking as excluded)"
+                                    )
+                                else:
+                                    logger.warning(
+                                        f"Failed to embed file in conversation history: {file_path} - {type(e).__name__}: {e}"
+                                    )
+                            except Exception:
+                                # Fallback if path translation also fails
                                 logger.warning(
                                     f"Failed to embed file in conversation history: {file_path} - {type(e).__name__}: {e}"
                                 )
-                        except Exception:
-                            # Fallback if path translation also fails
-                            logger.warning(
-                                f"Failed to embed file in conversation history: {file_path} - {type(e).__name__}: {e}"
+                            continue
+
+                    if file_contents:
+                        files_content = "".join(file_contents)
+                        if files_to_skip:
+                            files_content += (
+                                f"\n[NOTE: {len(files_to_skip)} additional file(s) were omitted due to size constraints, missing files, or access issues. "
+                                f"These were older files from earlier conversation turns.]\n"
                             )
-                        continue
-
-                if file_contents:
-                    files_content = "".join(file_contents)
-                    if files_to_skip:
-                        files_content += (
-                            f"\n[NOTE: {len(files_to_skip)} additional file(s) were omitted due to size constraints, missing files, or access issues. "
-                            f"These were older files from earlier conversation turns.]\n"
-                        )
-                    history_parts.append(files_content)
-                    logger.debug(
-                        f"Conversation history file embedding complete: {files_included} files embedded, {len(files_to_skip)} omitted, {total_tokens:,} total tokens"
-                    )
-                else:
-                    history_parts.append("(No accessible files found)")
-                    logger.debug(f"[FILES] No accessible files found from {len(files_to_include)} planned files")
-            else:
-                # Fallback to original read_files function
-                files_content = read_files_func(all_files)
-                if files_content:
-                    # Add token validation for the combined file content
-                    from utils.token_utils import check_token_limit
-
-                    within_limit, estimated_tokens = check_token_limit(files_content)
-                    if within_limit:
                         history_parts.append(files_content)
+                        logger.debug(
+                            f"Conversation history file embedding complete: {files_included} files embedded, {len(files_to_skip)} omitted, {total_tokens:,} total tokens"
+                        )
                     else:
-                        # Handle token limit exceeded for conversation files
-                        error_message = f"ERROR: The total size of files referenced in this conversation has exceeded the context limit and cannot be displayed.\nEstimated tokens: {estimated_tokens}, but limit is {max_file_tokens}."
-                        history_parts.append(error_message)
+                        history_parts.append("(No accessible files found)")
+                        logger.debug(f"[FILES] No accessible files found from {len(files_to_include)} planned files")
                 else:
-                    history_parts.append("(No accessible files found)")
+                    # Fallback to original read_files function
+                    files_content = read_files_func(all_files)
+                    if files_content:
+                        # Add token validation for the combined file content
+                        from utils.token_utils import check_token_limit
+
+                        within_limit, estimated_tokens = check_token_limit(files_content)
+                        if within_limit:
+                            history_parts.append(files_content)
+                        else:
+                            # Handle token limit exceeded for conversation files
+                            error_message = f"ERROR: The total size of files referenced in this conversation has exceeded the context limit and cannot be displayed.\nEstimated tokens: {estimated_tokens}, but limit is {max_file_tokens}."
+                            history_parts.append(error_message)
+                    else:
+                        history_parts.append("(No accessible files found)")
 
         history_parts.extend(
             [
@@ -982,8 +1037,65 @@ def build_conversation_history(context: ThreadContext, model_context=None, read_
     # while still having prioritized recent turns during the token-constrained collection phase
     turn_entries.reverse()
 
+    # If some turns were omitted due to budget, add a deterministic summary of the most recent omitted turns.
+    included_indices = {idx for idx, _ in turn_entries}
+    omitted_indices = [idx for idx in range(len(all_turns)) if idx not in included_indices]
+
+    summary_lines: list[str] = []
+
+    if omitted_indices:
+        # Keep the summary small and bounded by remaining history budget.
+        remaining_summary_budget = max(0, max_history_tokens - (file_embedding_tokens + total_turn_tokens))
+
+        def _summarize_turn(turn: ConversationTurn, turn_number: int) -> str:
+            tool_bits = []
+            if turn.tool_name:
+                tool_bits.append(f"tool={turn.tool_name}")
+            if turn.model_provider:
+                tool_bits.append(f"provider={turn.model_provider}")
+            if turn.model_name:
+                tool_bits.append(f"model={turn.model_name}")
+            tool_desc = ", ".join(tool_bits) if tool_bits else "tool=unknown"
+
+            files = turn.files or []
+            file_names = [os.path.basename(f) for f in files[:8]]
+            files_desc = "" if not file_names else f" files=[{', '.join(file_names)}]"
+
+            first_line = ""
+            for line in (turn.content or "").splitlines():
+                stripped = line.strip()
+                if stripped:
+                    first_line = stripped
+                    break
+            if len(first_line) > 240:
+                first_line = first_line[:237] + "..."
+
+            return f"- Turn {turn_number}: {tool_desc}{files_desc} · {first_line}"
+
+        # Summarize the most recent omitted turns first (closest to included context).
+        if remaining_summary_budget > 250:
+            summary_lines.append("")
+            summary_lines.append("=== SUMMARY OF OLDER TURNS (OMITTED) ===")
+            summarized = 0
+            for idx in reversed(omitted_indices):
+                candidate = _summarize_turn(all_turns[idx], idx + 1)
+                candidate_tokens = model_context.estimate_tokens(candidate)
+                if model_context.estimate_tokens("\n".join(summary_lines)) + candidate_tokens > remaining_summary_budget:
+                    break
+                summary_lines.append(candidate)
+                summarized += 1
+                # Keep summary bounded even when budget is huge.
+                if summarized >= 25:
+                    break
+            remaining_omitted = len(omitted_indices) - summarized
+            if remaining_omitted > 0:
+                summary_lines.append(f"- ... {remaining_omitted} earlier turn(s) omitted from summary")
+            summary_lines.append("=== END SUMMARY ===")
+
     # Add the turns in chronological order for natural LLM comprehension
     # The LLM will see: "--- Turn 1 (Agent) ---" followed by "--- Turn 2 (Model) ---" etc.
+    if summary_lines:
+        history_parts.extend(summary_lines)
     for _, turn_content in turn_entries:
         history_parts.append(turn_content)
 

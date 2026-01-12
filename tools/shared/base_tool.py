@@ -87,6 +87,10 @@ class BaseTool(ABC):
     _openrouter_registry_cache = None
     _custom_registry_cache = None
 
+    # Token budgeting profile used for prompt/history/file allocation.
+    # Tools optimized for code review/system design review should override.
+    token_profile: str = "default"
+
     @classmethod
     def _get_openrouter_registry(cls):
         """Get cached OpenRouter registry instance, creating if needed."""
@@ -114,6 +118,10 @@ class BaseTool(ABC):
         self.description = self.get_description()
         self.default_temperature = self.get_default_temperature()
         # Tool initialization complete
+
+    def get_token_profile(self, arguments: Optional[dict[str, Any]] = None) -> str:
+        """Return the token allocation profile for this tool invocation."""
+        return self.token_profile
 
     @abstractmethod
     def get_name(self) -> str:
@@ -1101,13 +1109,45 @@ class BaseTool(ABC):
             try:
                 # Expand + read in one pass so directory traversal is not duplicated.
                 from utils.file_utils import read_files_with_manifest
+                from utils.model_context import TokenProfile
+                from utils.file_relevance import FileRankingContext, infer_project_root
 
                 start_ts = time.perf_counter()
+                ranking_context = None
+                enable_reduction = False
+                try:
+                    profile = getattr(model_context, "token_profile", TokenProfile.DEFAULT)
+                    if profile in (TokenProfile.CODE_REVIEW, TokenProfile.SYSTEM_DESIGN_REVIEW):
+                        prompt_for_ranking = ""
+                        if args_to_use.get("_original_user_prompt"):
+                            prompt_for_ranking = str(args_to_use.get("_original_user_prompt") or "")
+                        elif args_to_use.get("prompt"):
+                            prompt_for_ranking = str(args_to_use.get("prompt") or "")
+                        explicit_file_paths = set()
+                        for path in files_to_embed:
+                            try:
+                                if os.path.isfile(path):
+                                    explicit_file_paths.add(path)
+                            except Exception:
+                                continue
+
+                        ranking_context = FileRankingContext(
+                            prompt=prompt_for_ranking,
+                            explicit_paths=explicit_file_paths,
+                            project_root=infer_project_root(files_to_embed),
+                        )
+                        enable_reduction = True
+                except Exception:
+                    ranking_context = None
+                    enable_reduction = False
+
                 file_content, embedded_files = read_files_with_manifest(
                     files_to_embed,
                     max_tokens=effective_max_tokens + reserve_tokens,
                     reserve_tokens=reserve_tokens,
                     include_line_numbers=self.wants_line_numbers_by_default(),
+                    ranking_context=ranking_context,
+                    enable_reduction=enable_reduction,
                 )
                 elapsed_s = time.perf_counter() - start_ts
                 try:

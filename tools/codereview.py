@@ -125,6 +125,8 @@ class CodeReviewTool(WorkflowTool):
     including security audits, performance analysis, architectural review, and maintainability assessment.
     """
 
+    token_profile = "code_review"
+
     def __init__(self):
         super().__init__()
         self.initial_request = None

@@ -563,6 +563,8 @@ def read_files_with_manifest(
     reserve_tokens: int = 50_000,
     *,
     include_line_numbers: bool = False,
+    ranking_context: Optional[object] = None,
+    enable_reduction: bool = False,
 ) -> tuple[str, list[str]]:
     """
     Read multiple files and optional direct code with token budgeting, returning an embedded-file manifest.
@@ -608,6 +610,32 @@ def read_files_with_manifest(
             logger.debug("[FILES] No files found from provided paths")
             content_parts.append(f"\n--- NO FILES FOUND ---\nProvided paths: {', '.join(file_paths)}\n--- END ---\n")
         else:
+            # Optional relevance-based ranking for review flows.
+            if ranking_context is not None:
+                try:
+                    from utils.file_relevance import FileRankingContext, rank_files
+
+                    if isinstance(ranking_context, FileRankingContext):
+                        # Best-effort dependency closure (Python local imports, depth=1).
+                        try:
+                            from utils.file_relevance import collect_python_dependencies, infer_project_root
+
+                            root = ranking_context.project_root or infer_project_root(all_files)
+                            dep_files = collect_python_dependencies(
+                                seed_files=ranking_context.explicit_paths,
+                                project_root=root,
+                                max_files=ranking_context.max_dependency_files,
+                            )
+                            for dep in dep_files:
+                                if dep not in all_files:
+                                    all_files.append(dep)
+                        except Exception as dep_exc:
+                            logger.debug("[FILES] Dependency closure disabled due to error: %s", dep_exc)
+
+                        all_files = rank_files(all_files, ctx=ranking_context)
+                except Exception as exc:
+                    logger.debug("[FILES] File ranking disabled due to error: %s", exc)
+
             # Read files sequentially until token limit is reached
             logger.debug(f"[FILES] Reading {len(all_files)} files with token budget {available_tokens:,}")
             for i, file_path in enumerate(all_files):
@@ -626,9 +654,54 @@ def read_files_with_manifest(
                     files_embedded.append(file_path)
                     logger.debug(f"[FILES] Added file {file_path}, total tokens: {total_tokens:,}")
                 else:
+                    remaining = max(0, available_tokens - total_tokens)
+                    if enable_reduction and remaining > 250:
+                        try:
+                            from utils.file_reduction import reduce_generic_text, reduce_python_source
+
+                            raw = read_file_safely(file_path)
+                            if raw is None:
+                                raise RuntimeError("No raw content available for reduction")
+
+                            extension = Path(file_path).suffix.lower()
+                            if extension == ".py":
+                                reduced = reduce_python_source(raw, max_tokens=max(0, remaining - 200))
+                            else:
+                                reduced = reduce_generic_text(raw, max_tokens=max(0, remaining - 200), file_path=file_path)
+
+                            reduced_body = reduced.content
+                            if should_add_line_numbers(file_path, include_line_numbers):
+                                reduced_body = _add_line_numbers(reduced_body)
+                            else:
+                                reduced_body = _normalize_line_endings(reduced_body)
+
+                            stat_result = Path(file_path).stat()
+                            modified_at = datetime.fromtimestamp(stat_result.st_mtime, tz=timezone.utc).strftime(
+                                "%Y-%m-%d %H:%M:%S %Z"
+                            )
+                            reduced_formatted = (
+                                f"\n--- BEGIN FILE: {file_path} (Last modified: {modified_at}) [REDUCED] ---\n"
+                                f"{reduced_body}\n"
+                                f"--- END FILE: {file_path} ---\n"
+                            )
+                            reduced_tokens = estimate_tokens(reduced_formatted)
+                            if reduced_tokens <= remaining:
+                                content_parts.append(reduced_formatted)
+                                total_tokens += reduced_tokens
+                                files_embedded.append(file_path)
+                                logger.debug(
+                                    "[FILES] Added reduced file %s, tokens=%s, total=%s",
+                                    file_path,
+                                    f"{reduced_tokens:,}",
+                                    f"{total_tokens:,}",
+                                )
+                                continue
+                        except Exception as exc:
+                            logger.debug("[FILES] Reduction failed for %s: %s", file_path, exc)
+
                     # File too large for remaining budget
                     logger.debug(
-                        f"[FILES] File {file_path} too large for remaining budget ({file_tokens:,} tokens, {available_tokens - total_tokens:,} remaining)"
+                        f"[FILES] File {file_path} too large for remaining budget ({file_tokens:,} tokens, {remaining:,} remaining)"
                     )
                     files_skipped.append(file_path)
 
@@ -829,7 +902,7 @@ def read_file_safely(file_path: str, max_size: int = 10 * 1024 * 1024) -> Option
         return None
 
 
-def check_total_file_size(files: list[str], model_name: str) -> Optional[dict]:
+def check_total_file_size(files: list[str], model_context) -> Optional[dict]:
     """
     Check if total file sizes would exceed token threshold before embedding.
 
@@ -842,7 +915,7 @@ def check_total_file_size(files: list[str], model_name: str) -> Optional[dict]:
 
     Args:
         files: List of file paths to check
-        model_name: The resolved model name for context-aware thresholds (required)
+        model_context: The resolved ModelContext for context-aware thresholds (required)
 
     Returns:
         Dict with `code_too_large` response if too large, None if acceptable
@@ -850,8 +923,10 @@ def check_total_file_size(files: list[str], model_name: str) -> Optional[dict]:
     if not files:
         return None
 
+    model_name = getattr(model_context, "model_name", None)
+
     # Validate we have a proper model name (not auto or None)
-    if not model_name or model_name.lower() == "auto":
+    if not model_name or str(model_name).lower() == "auto":
         raise ValueError(
             f"check_total_file_size called with unresolved model: '{model_name}'. "
             "Model must be resolved before file size checking."
@@ -859,9 +934,6 @@ def check_total_file_size(files: list[str], model_name: str) -> Optional[dict]:
 
     logger.info(f"File size check: Using model '{model_name}' for token limit calculation")
 
-    from utils.model_context import ModelContext
-
-    model_context = ModelContext(model_name)
     token_allocation = model_context.calculate_token_allocation()
 
     # Dynamic threshold based on model capacity

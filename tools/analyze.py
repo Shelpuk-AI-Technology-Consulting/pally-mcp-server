@@ -140,6 +140,8 @@ class AnalyzeTool(WorkflowTool):
     including architectural review, performance analysis, security assessment, and maintainability evaluation.
     """
 
+    token_profile = "code_review"
+
     def __init__(self):
         super().__init__()
         self.initial_request = None
@@ -166,6 +168,12 @@ class AnalyzeTool(WorkflowTool):
         from tools.models import ToolModelCategory
 
         return ToolModelCategory.EXTENDED_REASONING
+
+    def get_token_profile(self, arguments: Optional[dict[str, Any]] = None) -> str:
+        """Use a more file-heavy profile for architecture/system design review calls."""
+        if arguments and arguments.get("analysis_type") == "architecture":
+            return "system_design_review"
+        return self.token_profile
 
     def get_workflow_request_model(self):
         """Return the analyze workflow-specific request model."""

@@ -788,6 +788,7 @@ async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[TextCon
         from providers.registry import ModelProviderRegistry
         from utils.file_utils import check_total_file_size
         from utils.model_context import ModelContext
+        from utils.token_utils import estimate_tokens
 
         # Get model from arguments or use default
         model_name = arguments.get("model") or DEFAULT_MODEL
@@ -1084,12 +1085,13 @@ async def reconstruct_thread_context(arguments: dict[str, Any], *, tool_name: st
         )
 
     # Add user's new input to the conversation
+    from utils.token_utils import estimate_tokens
+
     user_prompt = arguments.get("prompt", "")
     if user_prompt:
         # Capture files referenced in this turn
         user_files = arguments.get("absolute_file_paths") or []
         logger.debug(f"[CONVERSATION_DEBUG] Adding user turn to thread {continuation_id}")
-        from utils.token_utils import estimate_tokens
 
         user_prompt_tokens = estimate_tokens(user_prompt)
         logger.debug(
